@@ -4,13 +4,24 @@
  */
 const ApiService = (() => {
   const API = 'api.php';
-  async function request(action, data = {}) {
-    const response = await fetch(API, {
+  async function request(action, data = {}, coverFile = null) {
+    const options = {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin',
-      body: JSON.stringify({action, ...data})
-    });
+      credentials: 'same-origin'
+    };
+    if (coverFile) {
+      const formData = new FormData();
+      formData.append('action', action);
+      Object.entries(data).forEach(([key, value]) => {
+        formData.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+      });
+      formData.append('coverImage', coverFile);
+      options.body = formData;
+    } else {
+      options.headers = {'Content-Type': 'application/json'};
+      options.body = JSON.stringify({action, ...data});
+    }
+    const response = await fetch(API, options);
     let result;
     try { result = await response.json(); }
     catch (_) { throw new Error('The server returned an invalid response.'); }
@@ -48,8 +59,8 @@ const ApiService = (() => {
       request('logout').catch(()=>{});
     },
     async getInventory() { return request('get_inventory'); },
-    async saveInventoryItem(itemData,actor) {
-      return request('save_inventory_item',{itemData,actor});
+    async saveInventoryItem(itemData,actor,coverFile) {
+      return request('save_inventory_item',{itemData,actor},coverFile);
     },
     async deleteInventoryItem(itemId,actor) {
       return request('delete_inventory_item',{itemId,actor});
@@ -153,6 +164,93 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindGlobalEvents() {
+  const appShell = document.getElementById('appShell');
+  const mobileNavButton = document.getElementById('mobileNavToggle');
+  const mobileNavSidebar = document.getElementById('leftSidebar');
+  const mobileNavBackdrop = document.getElementById('mobileNavBackdrop');
+  let mobileNavGesture = null;
+
+  document.addEventListener('touchstart', (event) => {
+    if (
+      !window.matchMedia('(max-width: 768px)').matches ||
+      appShell.classList.contains('hidden') ||
+      event.touches.length !== 1
+    ) {
+      mobileNavGesture = null;
+      return;
+    }
+    const touch = event.touches[0];
+    const menuWasOpen = appShell.classList.contains('mobile-nav-open');
+    if (!menuWasOpen && touch.clientX > 32) {
+      mobileNavGesture = null;
+      return;
+    }
+    mobileNavGesture = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      menuWasOpen,
+      drawerWidth: mobileNavSidebar.getBoundingClientRect().width,
+      offset: menuWasOpen ? 0 : -mobileNavSidebar.getBoundingClientRect().width,
+      active: false
+    };
+  }, {passive: true});
+
+  document.addEventListener('touchmove', (event) => {
+    if (!mobileNavGesture || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - mobileNavGesture.startX;
+    const deltaY = touch.clientY - mobileNavGesture.startY;
+
+    if (!mobileNavGesture.active) {
+      if (Math.abs(deltaX) < 6) return;
+      if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) {
+        if (Math.abs(deltaY) >= 6) mobileNavGesture = null;
+        return;
+      }
+      const opening = !mobileNavGesture.menuWasOpen && deltaX > 0;
+      const closing = mobileNavGesture.menuWasOpen && deltaX < 0;
+      if (!opening && !closing) {
+        mobileNavGesture = null;
+        return;
+      }
+      mobileNavGesture.active = true;
+      appShell.classList.add('mobile-nav-open', 'mobile-nav-dragging');
+    }
+
+    event.preventDefault();
+    const width = mobileNavGesture.drawerWidth;
+    mobileNavGesture.offset = mobileNavGesture.menuWasOpen
+      ? Math.max(-width, Math.min(0, deltaX))
+      : Math.max(-width, Math.min(0, -width + deltaX));
+    const openProgress = (mobileNavGesture.offset + width) / width;
+    mobileNavSidebar.style.transform = `translateX(${mobileNavGesture.offset}px)`;
+    mobileNavBackdrop.style.opacity = String(openProgress);
+  }, {passive: false});
+
+  const finishMobileNavGesture = (cancelled) => {
+    if (!mobileNavGesture) return;
+    const gesture = mobileNavGesture;
+    mobileNavGesture = null;
+    if (!gesture.active) return;
+
+    const shouldRemainOpen = cancelled
+      ? gesture.menuWasOpen
+      : gesture.offset > -gesture.drawerWidth / 2;
+    appShell.classList.toggle('mobile-nav-open', shouldRemainOpen);
+    appShell.classList.remove('mobile-nav-dragging');
+    mobileNavSidebar.style.removeProperty('transform');
+    mobileNavBackdrop.style.removeProperty('opacity');
+    mobileNavButton.setAttribute('aria-expanded', String(shouldRemainOpen));
+  };
+
+  document.addEventListener('touchend', () => {
+    finishMobileNavGesture(false);
+  }, {passive: true});
+
+  document.addEventListener('touchcancel', () => {
+    finishMobileNavGesture(true);
+  }, {passive: true});
+
   // Auth View Toggles
   document.getElementById('goToForgotBtn').addEventListener('click', () => switchAuthForm('forgot'));
   document.getElementById('toggleLoginPasswordBtn').addEventListener('click', () => {
@@ -213,7 +311,7 @@ function bindGlobalEvents() {
     }
   });
 
-  // Collapsible Left Sidebar Toggle (At bottom of navigation bar)
+  // Collapsible Left Sidebar Toggle (Above the main navigation tabs)
   document.getElementById('sidebarToggleBtn').addEventListener('click', () => {
     State.sidebarCollapsed = !State.sidebarCollapsed;
     document.getElementById('leftSidebar').classList.toggle('collapsed', State.sidebarCollapsed);
@@ -243,18 +341,35 @@ function bindGlobalEvents() {
 
   // Sidebar Log Out Button
   document.getElementById('sidebarLogoutBtn').addEventListener('click', () => {
-    ApiService.logout();
-    State.currentUser = null;
-    State.sellCart = [];
-    State.restockCart = [];
-    document.getElementById('appShell').classList.add('hidden');
-    document.getElementById('authView').classList.remove('hidden');
-    switchAuthForm('login');
-    showToast('Signed out');
+    openModal(`
+      <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 0.5rem;">Log Out</h3>
+      <p class="text-sm text-secondary" style="margin-bottom: 1.25rem;">Are you sure you want to log out of your account?</p>
+      <div class="flex justify-end gap-2">
+        <button type="button" class="btn btn-secondary" id="cancelLogoutBtn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirmLogoutBtn">Log Out</button>
+      </div>
+    `);
+    const logoutBackdrop = document.getElementById('modalBackdrop');
+    showConfirmationPrompt(logoutBackdrop, 'logout-confirmation');
+
+    document.getElementById('cancelLogoutBtn').addEventListener('click', () => closeConfirmationPrompt('logout-confirmation'));
+    document.getElementById('confirmLogoutBtn').addEventListener('click', () => {
+      closeConfirmationPrompt('logout-confirmation', () => {
+        closeMobileReceipt();
+        ApiService.logout();
+        State.currentUser = null;
+        State.sellCart = [];
+        State.restockCart = [];
+        document.getElementById('appShell').classList.add('hidden');
+        document.getElementById('authView').classList.remove('hidden');
+        switchAuthForm('login');
+        showToast('Signed out');
+      });
+    });
   });
 
   // Main Navigation Tabs
-  document.querySelectorAll('#mainNavTabs .nav-tab').forEach((btn) => {
+  document.querySelectorAll('#mainNavTabs .nav-tab[data-tab]').forEach((btn) => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
@@ -300,6 +415,7 @@ function bindGlobalEvents() {
       const sub = btn.dataset.invSub;
       document.getElementById('invSubCatalog').classList.toggle('hidden', sub !== 'catalog');
       document.getElementById('invSubTags').classList.toggle('hidden', sub !== 'tags');
+      if (sub !== 'catalog') closeMobileReceipt();
     });
   });
 
@@ -353,6 +469,9 @@ function bindGlobalEvents() {
   // Cart Mode Switch & Actions (Separate Sell and Restock lists)
   document.getElementById('modeSellBtn').addEventListener('click', () => setCartMode('SELL'));
   document.getElementById('modeRestockBtn').addEventListener('click', () => setCartMode('RESTOCK'));
+  document.getElementById('mobileReceiptToggle').addEventListener('click', openMobileReceipt);
+  document.getElementById('mobileReceiptBackdrop').addEventListener('click', closeMobileReceipt);
+  document.getElementById('closeMobileReceiptBtn').addEventListener('click', closeMobileReceipt);
   document.getElementById('clearCartBtn').addEventListener('click', () => {
     if (State.cartMode === 'SELL') {
       State.sellCart = [];
@@ -427,7 +546,12 @@ function bindGlobalEvents() {
 
   // Close Modal on Backdrop Click
   document.getElementById('modalBackdrop').addEventListener('click', (e) => {
-    if (e.target.id === 'modalBackdrop') attemptCloseModal();
+    if (e.target.id === 'modalBackdrop') {
+      const confirmationClass = ['logout-confirmation', 'unsaved-profile-confirmation']
+        .find((className) => e.target.classList.contains(className));
+      if (confirmationClass) closeConfirmationPrompt(confirmationClass);
+      else attemptCloseModal();
+    }
   });
 }
 
@@ -466,13 +590,50 @@ async function enterWorkspace(user) {
 }
 
 function switchTab(tabName) {
+  if (
+    State.activeTab === 'settings' &&
+    tabName !== 'settings' &&
+    isProfileCustomizationDirty()
+  ) {
+    openModal(`
+      <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 0.5rem;">Unsaved Profile Changes</h3>
+      <p class="text-sm text-secondary" style="margin-bottom: 1.25rem;">Your profile customization hasn’t been saved. Leave this page and discard your changes?</p>
+      <div class="flex justify-end gap-2">
+        <button type="button" class="btn btn-secondary" id="cancelLeaveSettingsBtn">Stay</button>
+        <button type="button" class="btn btn-danger" id="discardProfileChangesBtn">Leave Without Saving</button>
+      </div>
+    `);
+    const unsavedChangesBackdrop = document.getElementById('modalBackdrop');
+    showConfirmationPrompt(unsavedChangesBackdrop, 'unsaved-profile-confirmation');
+    document.getElementById('cancelLeaveSettingsBtn').addEventListener('click', () => {
+      closeConfirmationPrompt('unsaved-profile-confirmation');
+    });
+    document.getElementById('discardProfileChangesBtn').addEventListener('click', () => {
+      closeConfirmationPrompt('unsaved-profile-confirmation', () => {
+        document.getElementById('profileNameInput').value = State.currentUser.name;
+        switchTab(tabName);
+      });
+    });
+    return;
+  }
+
+  if (tabName !== 'inventory') closeMobileReceipt();
   State.activeTab = tabName;
-  document.querySelectorAll('#mainNavTabs .nav-tab').forEach((btn) => {
+  document.querySelectorAll('#mainNavTabs .nav-tab[data-tab]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
   document.querySelectorAll('.tab-section').forEach((sec) => {
     sec.classList.toggle('hidden', sec.id !== `tab-${tabName}`);
   });
+}
+
+function isProfileCustomizationDirty() {
+  const profileNameInput = document.getElementById('profileNameInput');
+  return Boolean(
+    State.currentUser &&
+    profileNameInput &&
+    profileNameInput.value.trim() !== State.currentUser.name
+  );
 }
 
 async function refreshAllData() {
@@ -841,25 +1002,6 @@ function renderInventoryTable() {
     .join('');
 
   // Render Standard Table View
-  tbody.innerHTML = paginatedItems
-    .map((item) => {
-      const isLow = item.stock <= item.lowThreshold;
-      const fallbackUrl = `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(item.title)}`;
-      const imgSrc = item.coverUrl || fallbackUrl;
-      return `
-        <div class="book-cover-card" onclick="openItemFormModal('${item.id}')" title="Click to edit ${escapeAttr(item.title)}">
-          <img src="${escapeAttr(imgSrc)}" alt="${escapeAttr(item.title)}" onerror="this.onerror=null;this.src='${fallbackUrl}';" />
-          <span class="book-cover-stock-pill ${isLow ? 'low' : ''}">${item.stock} in stock</span>
-          <div class="book-cover-overlay">
-            <div class="book-cover-title">${escapeHtml(item.title)}</div>
-            <div class="book-cover-sub">${escapeHtml(item.author || item.sku)} • ${formatPHP(item.sellPrice)}</div>
-          </div>
-        </div>
-      `;
-    })
-    .join('');
-
-  // Render Standard Table View
   tbody.innerHTML = filtered
     .map((item) => {
       const isLow = item.stock <= item.lowThreshold;
@@ -989,6 +1131,27 @@ function getActiveCart() {
   return State.cartMode === 'SELL' ? State.sellCart : State.restockCart;
 }
 
+function openMobileReceipt() {
+  if (State.sellCart.length === 0 && State.restockCart.length === 0) return;
+  document.getElementById('mobileReceiptBackdrop').classList.remove('hidden');
+  document.getElementById('receiptCart').classList.add('mobile-receipt-expanded');
+  document.getElementById('appShell').classList.add('mobile-receipt-open');
+  document.body.classList.add('mobile-receipt-open');
+  document.getElementById('mobileReceiptToggle').setAttribute('aria-expanded', 'true');
+}
+
+function closeMobileReceipt() {
+  const backdrop = document.getElementById('mobileReceiptBackdrop');
+  const receipt = document.getElementById('receiptCart');
+  const toggle = document.getElementById('mobileReceiptToggle');
+  if (!backdrop || !receipt || !toggle) return;
+  backdrop.classList.add('hidden');
+  receipt.classList.remove('mobile-receipt-expanded');
+  document.getElementById('appShell').classList.remove('mobile-receipt-open');
+  document.body.classList.remove('mobile-receipt-open');
+  toggle.setAttribute('aria-expanded', 'false');
+}
+
 function setCartMode(mode) {
   State.cartMode = mode;
   document.getElementById('modeSellBtn').className = `receipt-mode-btn ${mode === 'SELL' ? 'active-sell' : ''}`;
@@ -1052,15 +1215,28 @@ function renderCart() {
   const qtyEl = document.getElementById('cartTotalQty');
   const amtEl = document.getElementById('cartTotalAmount');
   const continueBtn = document.getElementById('cartContinueBtn');
+  const mobileReceiptCount = document.getElementById('mobileReceiptItemCount');
+  const mobileReceiptAmount = document.getElementById('mobileReceiptTotalAmount');
   const activeCart = getActiveCart();
-  const isEmpty = activeCart.length === 0;
-  receiptEl.classList.toggle('hidden', isEmpty);
-  document.getElementById('invSubCatalog').classList.toggle('receipt-hidden', isEmpty);
+  const hasItems = State.sellCart.length > 0 || State.restockCart.length > 0;
+  receiptEl.classList.toggle('hidden', !hasItems);
+  document.getElementById('mobileReceiptToggle').classList.toggle('hidden', !hasItems);
+  document.getElementById('invSubCatalog').classList.toggle('receipt-hidden', !hasItems);
 
-  if (isEmpty) {
+  if (activeCart.length === 0) {
+    const otherCart = State.cartMode === 'SELL' ? State.restockCart : State.sellCart;
+    const otherMode = State.cartMode === 'SELL' ? 'Restock' : 'Sell';
+    const otherQty = otherCart.reduce((total, entry) => total + entry.qty, 0);
     listEl.innerHTML = '';
+    if (hasItems) {
+      listEl.innerHTML = `<div class="text-xs text-muted" style="padding: 1.5rem 0; text-align: center;">This ${State.cartMode === 'SELL' ? 'Sell' : 'Restock'} receipt is empty.${otherQty ? ` ${otherQty} item${otherQty === 1 ? '' : 's'} remain in the ${otherMode} receipt.` : ''}</div>`;
+    } else {
+      closeMobileReceipt();
+    }
     qtyEl.textContent = '0';
     amtEl.textContent = '₱0.00';
+    mobileReceiptCount.textContent = `View ${State.cartMode === 'SELL' ? 'Sell' : 'Restock'} Receipt · 0 items`;
+    mobileReceiptAmount.textContent = '₱0.00';
     continueBtn.disabled = true;
     return;
   }
@@ -1095,6 +1271,8 @@ function renderCart() {
 
   qtyEl.textContent = totalQty;
   amtEl.textContent = formatPHP(totalAmount);
+  mobileReceiptCount.textContent = `View Receipt · ${totalQty} item${totalQty === 1 ? '' : 's'}`;
+  mobileReceiptAmount.textContent = formatPHP(totalAmount);
   continueBtn.disabled = false;
 }
 
@@ -1179,7 +1357,7 @@ window.openItemFormModal = function (itemId) {
       <div class="modal-section">
         <div class="modal-section-title">Book Information</div>
 
-        <!-- Cover Image Preview & URL -->
+        <!-- Cover Image Preview & Upload -->
         <div class="flex gap-3 items-start" style="margin-bottom: 0.95rem;">
           <img id="fItemCoverPreview" class="edit-cover-preview" src="${escapeAttr(defaultCover)}" alt="Book Cover Preview" onerror="this.onerror=null;this.src='https://placehold.co/300x450/7B4B2A/FFFDF9?text=No+Cover';" />
           <div class="w-full" style="min-width: 0;">
@@ -1191,8 +1369,9 @@ window.openItemFormModal = function (itemId) {
               </div>
             </div>
             <div class="input-group" style="margin-bottom: 0;">
-              <label>Cover Image URL</label>
-              <input type="url" id="fItemCoverUrl" class="form-control" value="${existing ? escapeAttr(existing.coverUrl || '') : ''}" placeholder="https://..." />
+              <label for="fItemCoverFile">Cover Image</label>
+              <input type="file" id="fItemCoverFile" class="form-control" accept="image/jpeg,image/png,image/webp" />
+              <small class="text-muted">JPG, PNG, or WebP; maximum 5 MB. Leave empty to keep the current cover.</small>
             </div>
           </div>
         </div>
@@ -1277,14 +1456,23 @@ window.openItemFormModal = function (itemId) {
   renderModalTagsMultiSelect();
 
   const formEl = document.getElementById('itemModalForm');
-  const coverInput = document.getElementById('fItemCoverUrl');
+  const coverInput = document.getElementById('fItemCoverFile');
   const coverPreview = document.getElementById('fItemCoverPreview');
 
-  // Live cover preview update
-  coverInput.addEventListener('input', () => {
-    const val = coverInput.value.trim();
-    const titleFallback = document.getElementById('fItemTitle').value.trim() || 'Book Cover';
-    coverPreview.src = val || `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(titleFallback)}`;
+  coverInput.addEventListener('change', () => {
+    const file = coverInput.files[0];
+    if (!file) return;
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type) || file.size > 5 * 1024 * 1024) {
+      coverInput.value = '';
+      showToast('Choose a JPG, PNG, or WebP image no larger than 5 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      if (coverInput.files[0] === file) coverPreview.src = reader.result;
+    });
+    reader.readAsDataURL(file);
   });
 
   // Prevent Enter key from submitting or closing the Edit Book pop-up (except inside textarea newlines)
@@ -1297,11 +1485,13 @@ window.openItemFormModal = function (itemId) {
   formEl.addEventListener('submit', async (e) => {
     e.preventDefault();
     const titleVal = document.getElementById('fItemTitle').value.trim();
-    const rawCover = document.getElementById('fItemCoverUrl').value.trim();
+    const coverFile = coverInput.files[0] || null;
     const payload = {
       id: existing ? existing.id : null,
       title: titleVal,
-      coverUrl: rawCover || `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(titleVal)}`,
+      coverUrl: existing && existing.coverUrl
+        ? existing.coverUrl
+        : `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(titleVal)}`,
       author: document.getElementById('fItemAuthor').value.trim(),
       description: document.getElementById('fItemDesc').value.trim(),
       sku: document.getElementById('fItemSku').value.trim(),
@@ -1312,10 +1502,14 @@ window.openItemFormModal = function (itemId) {
       lowThreshold: Number(document.getElementById('fItemThreshold').value),
       tags: [...State.modalSelectedTags]
     };
-    await ApiService.saveInventoryItem(payload, actorString());
-    closeModal();
-    await refreshAllData();
-    showToast(existing ? 'Book updated' : 'New book added');
+    try {
+      await ApiService.saveInventoryItem(payload, actorString(), coverFile);
+      closeModal();
+      await refreshAllData();
+      showToast(existing ? 'Book updated' : 'New book added');
+    } catch (err) {
+      showToast(err.message);
+    }
   });
 
   if (existing) {
@@ -1442,6 +1636,17 @@ window.openSupplierFormModal = function (supId) {
   const existing = supId ? State.suppliers.find((s) => s.id === supId) : null;
   const selectedTags = existing ? existing.tags : [];
 
+  const normalizePhoneDigits = (value) => {
+    let digits = String(value || '').replace(/\D/g, '');
+    if (digits.startsWith('63')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = digits.slice(1);
+    return digits.slice(0, 10);
+  };
+  const formatPhilippinePhone = (value) => {
+    const digits = normalizePhoneDigits(value);
+    const groups = [digits.slice(0, 3), digits.slice(3, 6), digits.slice(6, 10)].filter(Boolean);
+    return `+63 ${groups.join(' ')}`;
+  };
 
   openModal(`
     <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 1rem;">${existing ? 'Edit Supplier' : 'Add New Supplier'}</h3>
@@ -1459,7 +1664,7 @@ window.openSupplierFormModal = function (supId) {
       <div class="flex gap-2">
         <div class="input-group w-full">
           <label>Phone Number</label>
-          <input type="text" id="fSupPhone" class="form-control" value="${existing ? escapeAttr(existing.phone) : '+63 '}" maxlength="13" required />
+          <input type="text" id="fSupPhone" class="form-control" inputmode="numeric" value="${escapeAttr(formatPhilippinePhone(existing ? existing.phone : ''))}" required />
         </div>
         <div class="input-group w-full">
           <label>Email</label>
@@ -1493,6 +1698,20 @@ window.openSupplierFormModal = function (supId) {
       </div>
     </form>
   `);
+
+  const phoneInput = document.getElementById('fSupPhone');
+  phoneInput.addEventListener('input', () => {
+    const cursorPosition = phoneInput.selectionStart;
+    const digitsBeforeCursor = normalizePhoneDigits(phoneInput.value.slice(0, cursorPosition)).length;
+    const formattedPhone = formatPhilippinePhone(phoneInput.value);
+    if (phoneInput.value !== formattedPhone) {
+      phoneInput.value = formattedPhone;
+      const formattedCursor = 4 + digitsBeforeCursor +
+        (digitsBeforeCursor > 3 ? 1 : 0) +
+        (digitsBeforeCursor > 6 ? 1 : 0);
+      phoneInput.setSelectionRange(formattedCursor, formattedCursor);
+    }
+  });
 
   document.getElementById('supplierModalForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1738,6 +1957,26 @@ window.closeModal = function () {
   State.modalCloseGuard = null;
   document.getElementById('modalBackdrop').classList.add('hidden');
 };
+
+function closeConfirmationPrompt(promptClass, onClosed) {
+  const backdrop = document.getElementById('modalBackdrop');
+  if (!backdrop.classList.contains(promptClass) || backdrop.classList.contains('is-closing')) return;
+
+  backdrop.classList.remove('is-visible');
+  backdrop.classList.add('is-closing');
+  window.setTimeout(() => {
+    backdrop.classList.remove(promptClass, 'is-closing');
+    window.closeModal();
+    if (typeof onClosed === 'function') onClosed();
+  }, 280);
+}
+
+function showConfirmationPrompt(backdrop, promptClass) {
+  backdrop.classList.add(promptClass);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => backdrop.classList.add('is-visible'));
+  });
+}
 
 function escapeHtml(str) {
   return String(str ?? '')

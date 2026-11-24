@@ -30,6 +30,33 @@ function input(): array {
     $data=json_decode($raw ?: '{}',true);
     return is_array($data) ? $data : [];
 }
+function saveBookCoverUpload(): ?string {
+    global $uploadedCoverPath;
+    if (!isset($_FILES['coverImage']) || $_FILES['coverImage']['error'] === UPLOAD_ERR_NO_FILE) return null;
+    $file=$_FILES['coverImage'];
+    if ($file['error'] !== UPLOAD_ERR_OK) respond('The cover image could not be uploaded.',422);
+    if ((int)$file['size'] > 5 * 1024 * 1024) respond('Cover images must be no larger than 5 MB.',422);
+    if (!is_uploaded_file($file['tmp_name'])) respond('Invalid cover image upload.',422);
+
+    $imageInfo=@getimagesize($file['tmp_name']);
+    $extensions=['image/jpeg'=>'.jpg','image/png'=>'.png','image/webp'=>'.webp'];
+    $mime=$imageInfo['mime'] ?? '';
+    if (!$imageInfo || !isset($extensions[$mime])) {
+        respond('Choose a valid JPG, PNG, or WebP image.',422);
+    }
+
+    $directory=__DIR__.DIRECTORY_SEPARATOR.'uploads'.DIRECTORY_SEPARATOR.'book-covers';
+    if (!is_dir($directory) && !mkdir($directory,0755,true) && !is_dir($directory)) {
+        respond('The cover image folder could not be created.',500);
+    }
+    $filename=bin2hex(random_bytes(16)).$extensions[$mime];
+    $uploadedCoverPath=$directory.DIRECTORY_SEPARATOR.$filename;
+    if (!move_uploaded_file($file['tmp_name'],$uploadedCoverPath)) {
+        $uploadedCoverPath=null;
+        respond('The cover image could not be saved.',500);
+    }
+    return 'uploads/book-covers/'.$filename;
+}
 function requireLogin(): void {
     if (empty($_SESSION['user'])) respond('Please sign in again.',401);
 }
@@ -66,8 +93,15 @@ function getTransactions(): array {
         'unitCost'=>(float)$r['unit_cost'],'timestamp'=>(strtotime((string)$r['created_at']) ?: 0) * 1000];
     return $rows;
 }
+$uploadedCoverPath=null;
 try {
-    $in=input(); $action=$in['action'] ?? '';
+    $in=$_POST ?: input();
+    if (isset($in['itemData']) && is_string($in['itemData'])) {
+        $itemData=json_decode($in['itemData'],true);
+        if (!is_array($itemData)) respond('Invalid book information.',422);
+        $in['itemData']=$itemData;
+    }
+    $action=$in['action'] ?? '';
     $pdo=db();
 
     if ($action==='login') {
@@ -122,13 +156,16 @@ try {
 
         case 'save_inventory_item':
             $d=$in['itemData']; $tags=json_encode($d['tags']??[]);
+            $coverUrl=saveBookCoverUpload() ?? ($d['coverUrl']??'');
             if(!empty($d['id'])) {
                 $q=$pdo->prepare('UPDATE inventory_items SET sku=?,title=?,author=?,cover_url=?,description=?,tags=?,supplier_id=?,cost_price=?,sell_price=?,low_threshold=? WHERE item_id=?');
-                $q->execute([$d['sku'],$d['title'],$d['author']??'',$d['coverUrl']??'',$d['description']??'',$tags,($d['supplierId']??'')?:null,$d['costPrice'],$d['sellPrice'],$d['lowThreshold']??0,$d['id']]);
+                $q->execute([$d['sku'],$d['title'],$d['author']??'',$coverUrl,$d['description']??'',$tags,($d['supplierId']??'')?:null,$d['costPrice'],$d['sellPrice'],$d['lowThreshold']??0,$d['id']]);
+                $uploadedCoverPath=null;
                 logAction($actor,'BOOK_UPDATED',$d['title'],'Updated book information & pricing');
             } else {
                 $q=$pdo->prepare('INSERT INTO inventory_items(sku,title,author,cover_url,description,tags,supplier_id,cost_price,sell_price,stock,low_threshold) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
-                $q->execute([$d['sku'],$d['title'],$d['author']??'',$d['coverUrl']??'',$d['description']??'',$tags,($d['supplierId']??'')?:null,$d['costPrice'],$d['sellPrice'],$d['stock']??0,$d['lowThreshold']??0]);
+                $q->execute([$d['sku'],$d['title'],$d['author']??'',$coverUrl,$d['description']??'',$tags,($d['supplierId']??'')?:null,$d['costPrice'],$d['sellPrice'],$d['stock']??0,$d['lowThreshold']??0]);
+                $uploadedCoverPath=null;
                 logAction($actor,'BOOK_CREATED',$d['title'],'Added SKU '.$d['sku']);
             } respond(getItemRows());
 
@@ -276,6 +313,9 @@ try {
     }
 } catch(Throwable $e) {
     if(isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+    if($uploadedCoverPath && is_file($uploadedCoverPath) && !unlink($uploadedCoverPath)) {
+        error_log('Unable to remove an unreferenced uploaded cover image.');
+    }
     error_log($e->getMessage());
     respond('Server/database error. Check your PHP and MySQL configuration.',500);
 }

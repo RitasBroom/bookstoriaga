@@ -17,6 +17,7 @@ bookstoriaga/
 ## Notes on Assets & Backend Integration
 
 - **Icons (`assets/icons/`):** Ensure your custom PNG icons (`Dashboard.png`, `Inventory Management.png`, `Supplier Management.png`, `User Management.png`, `Audit Log.png`, `Settings.png`, `Book Mode.png`, `Light Mode.png`, `Dark Mode.png`, `Collapse.png`, `Log Out.png`, `Notifications.png`) are placed in `assets/icons/` when pushing to GitHub.
+- **Book covers:** When running the PHP API, uploaded JPG, PNG, and WebP covers are stored in `uploads/book-covers/`. The folder is created automatically on the first upload; PHP's upload limit must allow files up to 5 MB.
 - **Backend API Migration:** All data persistence is isolated inside `ApiService` at the top of `app.js`. Each asynchronous method (`login`, `getInventory`, `submitTransaction`, `manageUsers`, `getLogs`) can be replaced with `fetch()` calls to an AWS API Gateway / Lambda or Node/Express backend without changing UI rendering logic.
 
 ## Deploying to AWS

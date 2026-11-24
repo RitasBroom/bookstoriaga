@@ -79,13 +79,6 @@
   <div id="appShell" class="hidden">
     <!-- Top Header -->
     <header class="app-header">
-      <div class="header-brand">
-        <div class="header-brand-icon">BS</div>
-        <div>
-          <div class="font-bold" style="font-size: 1.02rem; line-height: 1.2;">Bookstoriaga</div>
-          <div class="text-xs text-muted" id="headerUserGreeting">Welcome back</div>
-        </div>
-      </div>
       <button
         type="button"
         class="btn btn-secondary btn-icon mobile-nav-toggle"
@@ -95,6 +88,13 @@
         aria-expanded="false"
         onclick="document.getElementById('appShell').classList.toggle('mobile-nav-open'); this.setAttribute('aria-expanded', document.getElementById('appShell').classList.contains('mobile-nav-open'));"
       >☰</button>
+      <div class="header-brand">
+        <div class="header-brand-icon">BS</div>
+        <div>
+          <div class="font-bold" style="font-size: 1.02rem; line-height: 1.2;">Bookstoriaga</div>
+          <div class="text-xs text-muted" id="headerUserGreeting">Welcome back</div>
+        </div>
+      </div>
 
       <!-- Right Controls: Role Pill + Notification Bell (Kept where they are) -->
       <div class="flex items-center gap-2">
@@ -126,6 +126,10 @@
         onclick="document.getElementById('appShell').classList.remove('mobile-nav-open'); document.getElementById('mobileNavToggle').setAttribute('aria-expanded', 'false');"
       >
         <nav class="flex flex-col gap-1" id="mainNavTabs">
+          <button type="button" class="nav-tab" id="sidebarToggleBtn" title="Collapse Navigation">
+            <span class="nav-short-badge"><img class="sidebar-icon" id="sidebarToggleIcon" src="assets/icons/Collapse.png" alt="" /></span>
+            <span class="nav-label">Collapse Menu</span>
+          </button>
           <button class="nav-tab active" data-tab="dashboard" title="Dashboard">
             <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Dashboard.png" alt="" /></span>
             <span class="nav-label">Dashboard</span>
@@ -152,7 +156,7 @@
           </button>
         </nav>
 
-        <!-- Bottom Sidebar Controls: Book Mode, Dark Mode, Collapse Menu, Log Out -->
+        <!-- Bottom Sidebar Controls: Book Mode, Dark Mode, Log Out -->
         <div class="sidebar-footer">
           <button type="button" class="nav-tab" id="sidebarBookModeBtn" title="Toggle Book Cover Mode">
             <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Book%20Mode.png" alt="" /></span>
@@ -163,10 +167,6 @@
             <span class="nav-short-badge"><img class="sidebar-icon" id="sidebarThemeIcon" src="assets/icons/Light%20Mode.png" alt="" /></span>
             <span class="nav-label">Dark Mode</span>
             <span class="toggle-switch" id="sidebarThemeSwitch"></span>
-          </button>
-          <button type="button" class="nav-tab" id="sidebarToggleBtn" title="Collapse Navigation">
-            <span class="nav-short-badge"><img class="sidebar-icon" id="sidebarToggleIcon" src="assets/icons/Collapse.png" alt="" /></span>
-            <span class="nav-label">Collapse Menu</span>
           </button>
           <button type="button" class="nav-tab" id="sidebarLogoutBtn" title="Log Out" style="color: var(--status-danger);">
             <span class="nav-short-badge" style="background: var(--status-danger-bg); color: var(--status-danger);"><img class="sidebar-icon" src="assets/icons/Log%20Out.png" alt="" /></span>
@@ -275,6 +275,11 @@
 
           <!-- SUB-TAB A: BOOKS + SIDE RECEIPT CART -->
           <div id="invSubCatalog" class="inventory-layout receipt-hidden">
+            <button type="button" class="mobile-receipt-toggle hidden" id="mobileReceiptToggle" aria-controls="receiptCart" aria-expanded="false">
+              <span><span id="mobileReceiptItemCount">View Receipt</span></span>
+              <strong id="mobileReceiptTotalAmount">₱0.00</strong>
+            </button>
+            <button type="button" class="mobile-receipt-backdrop hidden" id="mobileReceiptBackdrop" aria-label="Close receipt"></button>
             <div>
               <!-- Flush Search, Sort & Tag Filter Controls (Directly on background) -->
               <div class="flush-filter-section">
@@ -337,7 +342,10 @@
             <aside class="receipt-cart hidden" id="receiptCart">
               <div class="flex justify-between items-center" style="margin-bottom: 0.75rem;">
                 <h3 class="font-bold" style="font-size: 1.05rem;">Counter Receipt</h3>
-                <button class="text-xs font-semibold text-muted" id="clearCartBtn">Clear All</button>
+                <div class="flex items-center gap-2">
+                  <button class="text-xs font-semibold text-muted" id="clearCartBtn">Clear All</button>
+                  <button type="button" class="btn btn-secondary btn-icon mobile-receipt-close" id="closeMobileReceiptBtn" aria-label="Close receipt">×</button>
+                </div>
               </div>
 
               <!-- Sell vs Restock Mode Switch -->
@@ -353,7 +361,7 @@
               <hr class="receipt-divider" />
 
               <!-- Cart Line Items -->
-              <div id="cartItemsList" style="min-height: 110px; max-height: 310px; overflow-y: auto;"></div>
+              <div id="cartItemsList" class="cart-items-list"></div>
 
               <hr class="receipt-divider" />
 
