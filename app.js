@@ -1,529 +1,77 @@
 /**
- * ============================================================================
- * SIMULATED ApiService (localStorage-backed)
- * Designed so every method returns a Promise and can be swapped with real
- * `fetch('/api/...')` calls without modifying UI rendering logic.
- * ============================================================================
+ * Bookstoriaga PHP/MySQL API adapter.
+ * The UI controller below continues to call the same ApiService methods.
  */
 const ApiService = (() => {
-  const STORAGE_KEYS = {
-    USERS: 'bs_users_v1',
-    INVENTORY: 'bs_inventory_v1',
-    TAGS: 'bs_tags_v1',
-    SUPPLIERS: 'bs_suppliers_v1',
-    TRANSACTIONS: 'bs_transactions_v1',
-    LOGS: 'bs_logs_v1',
-    SESSION: 'bs_session_v1',
-    THEME: 'bs_theme_v1'
-  };
-
-  const delay = (ms = 80) => new Promise((res) => setTimeout(res, ms));
-
-  const read = (key, fallback) => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch (e) {
-      return fallback;
-    }
-  };
-
-  const write = (key, value) => {
-    localStorage.setItem(key, JSON.stringify(value));
-  };
-
-  // Seed realistic Philippine comic shop data on first visit
-  function initSeedData(force = false) {
-    if (!force && localStorage.getItem(STORAGE_KEYS.INVENTORY)) return;
-
-    const seedUsers = [
-      { id: 'u1', name: 'Mateo Reyes', email: 'owner@bookstoriaga.ph', password: 'password123', role: 'Owner', active: true },
-      { id: 'u2', name: 'Clarissa Santos', email: 'staff@bookstoriaga.ph', password: 'password123', role: 'Staff', active: true },
-      { id: 'u3', name: 'Kenji Tan', email: 'kenji@bookstoriaga.ph', password: 'password123', role: 'Staff', active: false }
-    ];
-
-    const seedTags = ['Manga', 'Shonen', 'Seinen', 'Light Novel', 'Artbook', 'Pinoy Komiks', 'Graphic Novel'];
-
-    const seedSuppliers = [
-      {
-        id: 's1',
-        name: 'Manila Manga Distributors',
-        contact: 'Ramon Mendoza',
-        phone: '+63 917 555 0142',
-        email: 'orders@manilamanga.ph',
-        leadDays: 3,
-        tags: ['Manga', 'Shonen', 'Seinen']
-      },
-      {
-        id: 's2',
-        name: 'Shibuya Book & Light Novel PH',
-        contact: 'Aiko Takahashi',
-        phone: '+63 918 442 8890',
-        email: 'wholesale@shibuyabooks.ph',
-        leadDays: 5,
-        tags: ['Light Novel', 'Artbook', 'Graphic Novel']
-      },
-      {
-        id: 's3',
-        name: 'Bayanihan Indie Komiks Press',
-        contact: 'Liza Bautista',
-        phone: '+63 920 311 7741',
-        email: 'press@bayanihankomiks.ph',
-        leadDays: 2,
-        tags: ['Pinoy Komiks', 'Artbook']
-      }
-    ];
-
-    const seedInventory = [
-      {
-        id: 'i1',
-        sku: 'MNG-OP-108',
-        title: 'One Piece Vol. 108',
-        author: 'Eiichiro Oda',
-        coverUrl: 'https://placehold.co/300x450/7B4B2A/FFFDF9?text=One+Piece+Vol.+108',
-        description: 'Luffy and the Straw Hat Pirates face the Marines and Vegapunk secrets on Egghead Island.',
-        tags: ['Manga', 'Shonen'],
-        supplierId: 's1',
-        costPrice: 360,
-        sellPrice: 599,
-        stock: 28,
-        lowThreshold: 8
-      },
-      {
-        id: 'i2',
-        sku: 'MNG-JJK-25',
-        title: 'Jujutsu Kaisen Vol. 25',
-        author: 'Gege Akutami',
-        coverUrl: 'https://placehold.co/300x450/3E3128/F5ECE4?text=Jujutsu+Kaisen+25',
-        description: 'Sukuna unleashes his full technique in the Shinjuku Showdown arc.',
-        tags: ['Manga', 'Shonen'],
-        supplierId: 's1',
-        costPrice: 350,
-        sellPrice: 585,
-        stock: 5,
-        lowThreshold: 8
-      },
-      {
-        id: 'i3',
-        sku: 'MNG-SKM-23',
-        title: 'Sakamoto Days Vol. 23',
-        author: 'Yuto Suzuki',
-        coverUrl: 'https://placehold.co/300x450/A67B5B/FFFDF9?text=Sakamoto+Days+23',
-        description: 'Former legendary hitman Taro Sakamoto defends his quiet convenience store life against the Order.',
-        tags: ['Manga', 'Shonen'],
-        supplierId: 's1',
-        costPrice: 345,
-        sellPrice: 575,
-        stock: 3,
-        lowThreshold: 5
-      },
-      {
-        id: 'i4',
-        sku: 'KMK-TRESE-01',
-        title: 'Trese: Murder on Balete Drive',
-        author: 'Budjette Tan & Kajo Baldisimo',
-        coverUrl: 'https://placehold.co/300x450/2D221B/FFFDF9?text=Trese+Book+1',
-        description: 'Alexandra Trese investigates supernatural crimes across Metro Manila.',
-        tags: ['Pinoy Komiks', 'Graphic Novel'],
-        supplierId: 's3',
-        costPrice: 290,
-        sellPrice: 495,
-        stock: 22,
-        lowThreshold: 6
-      },
-      {
-        id: 'i5',
-        sku: 'MNG-BRK-DLX1',
-        title: 'Berserk Deluxe Edition Vol. 1',
-        author: 'Kentaro Miura',
-        coverUrl: 'https://placehold.co/300x450/5E371D/FFFDF9?text=Berserk+Deluxe+1',
-        description: 'Oversized leatherette hardcover collecting the first three volumes of the dark fantasy classic.',
-        tags: ['Manga', 'Seinen'],
-        supplierId: 's1',
-        costPrice: 1750,
-        sellPrice: 2650,
-        stock: 11,
-        lowThreshold: 5
-      },
-      {
-        id: 'i6',
-        sku: 'ART-GHL-2025',
-        title: 'Studio Ghibli Layout Designs',
-        author: 'Hayao Miyazaki & Isao Takahata',
-        coverUrl: 'https://placehold.co/300x450/6A574B/FFFDF9?text=Ghibli+Artbook',
-        description: 'Comprehensive archival collection of original hand-drawn film storyboards and layouts.',
-        tags: ['Artbook'],
-        supplierId: 's2',
-        costPrice: 1200,
-        sellPrice: 1950,
-        stock: 4,
-        lowThreshold: 5
-      },
-      {
-        id: 'i7',
-        sku: 'LNV-SLV-09',
-        title: 'Solo Leveling Novel Vol. 9',
-        author: 'Chugong',
-        coverUrl: 'https://placehold.co/300x450/4A3728/F5ECE4?text=Solo+Leveling+9',
-        description: 'Sung Jinwoo prepares for the final war against the Monarchs.',
-        tags: ['Light Novel'],
-        supplierId: 's2',
-        costPrice: 480,
-        sellPrice: 795,
-        stock: 16,
-        lowThreshold: 5
-      }
-    ];
-
-    const now = Date.now();
-    const dayMs = 86400000;
-    const seedTransactions = [
-      { id: 't1', type: 'SELL', itemId: 'i1', qty: 6, unitPrice: 599, unitCost: 360, timestamp: now - 3600000 * 3 },
-      { id: 't2', type: 'SELL', itemId: 'i2', qty: 9, unitPrice: 585, unitCost: 350, timestamp: now - dayMs * 2 },
-      { id: 't3', type: 'SELL', itemId: 'i4', qty: 14, unitPrice: 495, unitCost: 290, timestamp: now - dayMs * 5 },
-      { id: 't4', type: 'SELL', itemId: 'i3', qty: 4, unitPrice: 575, unitCost: 345, timestamp: now - dayMs * 14 },
-      { id: 't5', type: 'SELL', itemId: 'i7', qty: 11, unitPrice: 795, unitCost: 480, timestamp: now - dayMs * 45 }
-    ];
-
-    const seedLogs = [
-      {
-        id: 'l1',
-        timestamp: new Date(now - 3600000 * 3).toISOString(),
-        user: 'Clarissa Santos (Staff)',
-        action: 'SALE_COMPLETED',
-        target: 'Receipt #POS-1042',
-        details: 'Sold 6x One Piece Vol. 108 (₱3,594.00)'
-      },
-      {
-        id: 'l2',
-        timestamp: new Date(now - dayMs).toISOString(),
-        user: 'Mateo Reyes (Owner)',
-        action: 'INVENTORY_UPDATE',
-        target: 'Jujutsu Kaisen Vol. 25',
-        details: 'Updated low-stock alert threshold to 8 units'
-      }
-    ];
-
-    write(STORAGE_KEYS.USERS, seedUsers);
-    write(STORAGE_KEYS.TAGS, seedTags);
-    write(STORAGE_KEYS.SUPPLIERS, seedSuppliers);
-    write(STORAGE_KEYS.INVENTORY, seedInventory);
-    write(STORAGE_KEYS.TRANSACTIONS, seedTransactions);
-    write(STORAGE_KEYS.LOGS, seedLogs);
-  }
-
-  // Helper to append immutable audit log
-  function recordLog(actorName, action, target, details) {
-    const logs = read(STORAGE_KEYS.LOGS, []);
-    logs.unshift({
-      id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-      timestamp: new Date().toISOString(),
-      user: actorName,
-      action,
-      target,
-      details
+  const API = 'api.php';
+  async function request(action, data = {}) {
+    const response = await fetch(API, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({action, ...data})
     });
-    write(STORAGE_KEYS.LOGS, logs);
+    let result;
+    try { result = await response.json(); }
+    catch (_) { throw new Error('The server returned an invalid response.'); }
+    if (!response.ok || result.success === false) throw new Error(result.message || 'Request failed.');
+    return result.data;
   }
-
+  let currentSession = null;
   return {
-    init: initSeedData,
-
-    // 1. AUTHENTICATION ENDPOINTS
-    async login(email, password) {
-      await delay();
-      const users = read(STORAGE_KEYS.USERS, []);
-      const found = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase() && u.password === password);
-      if (!found) throw new Error('Invalid email or password.');
-      if (!found.active) throw new Error('This account is deactivated. Contact the shop Owner.');
-      const sessionUser = { id: found.id, name: found.name, email: found.email, role: found.role };
-      write(STORAGE_KEYS.SESSION, sessionUser);
-      recordLog(`${found.name} (${found.role})`, 'USER_LOGIN', found.email, 'Signed into workspace');
-      return sessionUser;
+    init() {},
+    async login(email,password) {
+      const user = await request('login',{email,password});
+      currentSession = user;
+      localStorage.setItem('bs_session_v1',JSON.stringify(user));
+      return user;
     },
-
-    async verifyEmailForReset(email) {
-      await delay();
-      const users = read(STORAGE_KEYS.USERS, []);
-      const found = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (!found) throw new Error('No account found with that email address.');
-      return found.email;
+    async verifyEmailForReset(email) { return request('verify_reset_email',{email}); },
+    async resetPassword(email,newPassword) { return request('reset_password',{email,newPassword}); },
+    async changePassword(userId,currentPassword,newPassword) {
+      return request('change_password',{userId,currentPassword,newPassword});
     },
-
-    async resetPassword(email, newPassword) {
-      await delay();
-      const users = read(STORAGE_KEYS.USERS, []);
-      const idx = users.findIndex((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (idx === -1) throw new Error('Account not found.');
-      users[idx].password = newPassword;
-      write(STORAGE_KEYS.USERS, users);
-      recordLog(`${users[idx].name} (${users[idx].role})`, 'PASSWORD_RESET', users[idx].email, 'Completed password recovery');
-      return users[idx];
+    async updateProfile(userId,newName) {
+      const user = await request('update_profile',{userId,newName});
+      currentSession = user;
+      localStorage.setItem('bs_session_v1',JSON.stringify(user));
+      return user;
     },
-
-    async changePassword(userId, currentPassword, newPassword) {
-      await delay();
-      const users = read(STORAGE_KEYS.USERS, []);
-      const idx = users.findIndex((u) => u.id === userId);
-      if (idx === -1) throw new Error('User not found.');
-      if (users[idx].password !== currentPassword) throw new Error('Current password is incorrect.');
-      users[idx].password = newPassword;
-      write(STORAGE_KEYS.USERS, users);
-      recordLog(`${users[idx].name} (${users[idx].role})`, 'PASSWORD_CHANGED', users[idx].email, 'Updated account password in Settings');
-      return true;
-    },
-
-    async updateProfile(userId, newName) {
-      await delay();
-      const cleanName = newName.trim();
-      if (!cleanName) throw new Error('Display name cannot be empty.');
-      const users = read(STORAGE_KEYS.USERS, []);
-      const idx = users.findIndex((u) => u.id === userId);
-      if (idx === -1) throw new Error('User not found.');
-      const oldName = users[idx].name;
-      users[idx].name = cleanName;
-      write(STORAGE_KEYS.USERS, users);
-
-      const sessionUser = { id: users[idx].id, name: users[idx].name, email: users[idx].email, role: users[idx].role };
-      write(STORAGE_KEYS.SESSION, sessionUser);
-      recordLog(`${cleanName} (${users[idx].role})`, 'PROFILE_UPDATED', users[idx].email, `Changed display name from "${oldName}" to "${cleanName}"`);
-      return sessionUser;
-    },
-
     getSession() {
-      return read(STORAGE_KEYS.SESSION, null);
+      if (currentSession) return currentSession;
+      try { return JSON.parse(localStorage.getItem('bs_session_v1') || 'null'); }
+      catch (_) { return null; }
     },
-
     logout() {
-      const s = read(STORAGE_KEYS.SESSION, null);
-      if (s) recordLog(`${s.name} (${s.role})`, 'USER_LOGOUT', s.email, 'Signed out');
-      localStorage.removeItem(STORAGE_KEYS.SESSION);
+      currentSession = null;
+      localStorage.removeItem('bs_session_v1');
+      request('logout').catch(()=>{});
     },
-
-    // 2. INVENTORY, TAGS & SUPPLIERS ENDPOINTS
-    async getInventory() {
-      await delay(40);
-      return {
-        items: read(STORAGE_KEYS.INVENTORY, []),
-        tags: read(STORAGE_KEYS.TAGS, []),
-        suppliers: read(STORAGE_KEYS.SUPPLIERS, []),
-        transactions: read(STORAGE_KEYS.TRANSACTIONS, [])
-      };
+    async getInventory() { return request('get_inventory'); },
+    async saveInventoryItem(itemData,actor) {
+      return request('save_inventory_item',{itemData,actor});
     },
-
-    async saveInventoryItem(itemData, actor) {
-      await delay();
-      const items = read(STORAGE_KEYS.INVENTORY, []);
-      if (itemData.id) {
-        const idx = items.findIndex((i) => i.id === itemData.id);
-        if (idx !== -1) {
-          // Stock is preserved on edit; stock changes happen only through receipt transactions
-          const { stock, ...safeUpdates } = itemData;
-          items[idx] = { ...items[idx], ...safeUpdates };
-          recordLog(actor, 'BOOK_UPDATED', items[idx].title, `Updated book information & pricing`);
-        }
-      } else {
-        const newItem = {
-          ...itemData,
-          id: 'item_' + Date.now()
-        };
-        items.unshift(newItem);
-        recordLog(actor, 'BOOK_CREATED', newItem.title, `Added SKU ${newItem.sku} with ${newItem.stock} initial stock`);
-      }
-      write(STORAGE_KEYS.INVENTORY, items);
-      return items;
+    async deleteInventoryItem(itemId,actor) {
+      return request('delete_inventory_item',{itemId,actor});
     },
-
-    async deleteInventoryItem(itemId, actor) {
-      await delay();
-      let items = read(STORAGE_KEYS.INVENTORY, []);
-      const target = items.find((i) => i.id === itemId);
-      items = items.filter((i) => i.id !== itemId);
-      write(STORAGE_KEYS.INVENTORY, items);
-      if (target) recordLog(actor, 'BOOK_DELETED', target.title, `Removed SKU ${target.sku} from books`);
-      return items;
+    async manageTags(action,payload,actor) {
+      return request('manage_tags',{tagAction:action,payload,actor});
     },
-
-    async manageTags(action, payload, actor) {
-      await delay();
-      let tags = read(STORAGE_KEYS.TAGS, []);
-      let items = read(STORAGE_KEYS.INVENTORY, []);
-      let suppliers = read(STORAGE_KEYS.SUPPLIERS, []);
-
-      if (action === 'ADD') {
-        const clean = payload.name.trim();
-        if (!clean) throw new Error('Tag name cannot be empty.');
-        if (tags.some((t) => t.toLowerCase() === clean.toLowerCase())) throw new Error('Tag already exists.');
-        tags.push(clean);
-        recordLog(actor, 'TAG_CREATED', clean, 'Added new category tag');
-      } else if (action === 'RENAME') {
-        const { oldName, newName } = payload;
-        const clean = newName.trim();
-        if (!clean) throw new Error('Tag name cannot be empty.');
-        tags = tags.map((t) => (t === oldName ? clean : t));
-        items = items.map((i) => ({ ...i, tags: i.tags.map((t) => (t === oldName ? clean : t)) }));
-        suppliers = suppliers.map((s) => ({ ...s, tags: s.tags.map((t) => (t === oldName ? clean : t)) }));
-        write(STORAGE_KEYS.INVENTORY, items);
-        write(STORAGE_KEYS.SUPPLIERS, suppliers);
-        recordLog(actor, 'TAG_RENAMED', `${oldName} to ${clean}`, 'Renamed tag across books & suppliers');
-      } else if (action === 'DELETE') {
-        const { name } = payload;
-        tags = tags.filter((t) => t !== name);
-        items = items.map((i) => ({ ...i, tags: i.tags.filter((t) => t !== name) }));
-        suppliers = suppliers.map((s) => ({ ...s, tags: s.tags.filter((t) => t !== name) }));
-        write(STORAGE_KEYS.INVENTORY, items);
-        write(STORAGE_KEYS.SUPPLIERS, suppliers);
-        recordLog(actor, 'TAG_DELETED', name, 'Deleted tag from system');
-      }
-      write(STORAGE_KEYS.TAGS, tags);
-      return tags;
+    async saveSupplier(supData,actor) {
+      return request('save_supplier',{supData,actor});
     },
-
-    async saveSupplier(supData, actor) {
-      await delay();
-      const suppliers = read(STORAGE_KEYS.SUPPLIERS, []);
-      if (supData.id) {
-        const idx = suppliers.findIndex((s) => s.id === supData.id);
-        if (idx !== -1) {
-          suppliers[idx] = { ...suppliers[idx], ...supData };
-          recordLog(actor, 'SUPPLIER_UPDATED', suppliers[idx].name, `Updated contact (${suppliers[idx].contact})`);
-        }
-      } else {
-        const created = { ...supData, id: 'sup_' + Date.now() };
-        suppliers.unshift(created);
-        recordLog(actor, 'SUPPLIER_CREATED', created.name, `Added supplier (${created.contact})`);
-      }
-      write(STORAGE_KEYS.SUPPLIERS, suppliers);
-      return suppliers;
+    async deleteSupplier(supplierId,actor) {
+      return request('delete_supplier',{supplierId,actor});
     },
-
-    // 3. TRANSACTION SUBMISSION (SELL OR RESTOCK)
-    async submitTransaction({ mode, cartItems }, actor) {
-      await delay();
-      const items = read(STORAGE_KEYS.INVENTORY, []);
-      const transactions = read(STORAGE_KEYS.TRANSACTIONS, []);
-      const now = Date.now();
-      let grandTotal = 0;
-
-      if (mode === 'SELL') {
-        for (const entry of cartItems) {
-          const inv = items.find((i) => i.id === entry.itemId);
-          if (!inv || inv.stock < entry.qty) {
-            throw new Error(`Insufficient stock for "${inv ? inv.title : 'Unknown Book'}".`);
-          }
-        }
-      }
-
-      const summaryParts = [];
-      for (const entry of cartItems) {
-        const idx = items.findIndex((i) => i.id === entry.itemId);
-        if (idx === -1) continue;
-        const unitPrice = mode === 'SELL' ? items[idx].sellPrice : items[idx].costPrice;
-        grandTotal += unitPrice * entry.qty;
-
-        if (mode === 'SELL') {
-          items[idx].stock -= entry.qty;
-          transactions.push({
-            id: 'tx_' + now + '_' + entry.itemId,
-            type: 'SELL',
-            itemId: entry.itemId,
-            qty: entry.qty,
-            unitPrice: items[idx].sellPrice,
-            unitCost: items[idx].costPrice,
-            timestamp: now
-          });
-        } else {
-          items[idx].stock += entry.qty;
-          transactions.push({
-            id: 'tx_' + now + '_' + entry.itemId,
-            type: 'RESTOCK',
-            itemId: entry.itemId,
-            qty: entry.qty,
-            unitPrice: items[idx].sellPrice,
-            unitCost: items[idx].costPrice,
-            timestamp: now
-          });
-        }
-        summaryParts.push(`${entry.qty}x ${items[idx].title}`);
-      }
-
-      write(STORAGE_KEYS.INVENTORY, items);
-      write(STORAGE_KEYS.TRANSACTIONS, transactions);
-
-      const receiptRef = `${mode === 'SELL' ? 'POS' : 'RST'}-${String(now).slice(-5)}`;
-      recordLog(
-        actor,
-        mode === 'SELL' ? 'SALE_COMPLETED' : 'RESTOCK_COMPLETED',
-        `Receipt #${receiptRef}`,
-        `${mode === 'SELL' ? 'Sold' : 'Restocked'}: ${summaryParts.join(', ')} (Total: ₱${grandTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })})`
-      );
-
-      return { receiptRef, grandTotal };
+    async submitTransaction(payload,actor) {
+      return request('submit_transaction',{payload,actor});
     },
-
-    // 4. USER MANAGEMENT (OWNER ONLY)
-    async manageUsers(action, payload, actor) {
-      await delay();
-      const users = read(STORAGE_KEYS.USERS, []);
-      if (action === 'LIST') return users;
-
-      if (action === 'SAVE') {
-        if (payload.id) {
-          const idx = users.findIndex((u) => u.id === payload.id);
-          if (idx !== -1) {
-            users[idx] = { ...users[idx], name: payload.name, email: payload.email, role: payload.role };
-            recordLog(actor, 'USER_UPDATED', payload.email, `Updated role to ${payload.role}`);
-          }
-        } else {
-          if (users.some((u) => u.email.toLowerCase() === payload.email.toLowerCase())) {
-            throw new Error('A user with this email already exists.');
-          }
-          users.push({
-            id: 'u_' + Date.now(),
-            name: payload.name,
-            email: payload.email,
-            password: payload.password || 'password123',
-            role: payload.role,
-            active: true
-          });
-          recordLog(actor, 'USER_CREATED', payload.email, `Created ${payload.role} account for ${payload.name}`);
-        }
-      } else if (action === 'TOGGLE_ACTIVE') {
-        const idx = users.findIndex((u) => u.id === payload.id);
-        if (idx !== -1) {
-          users[idx].active = !users[idx].active;
-          recordLog(
-            actor,
-            users[idx].active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
-            users[idx].email,
-            `Account marked as ${users[idx].active ? 'Active' : 'Inactive'}`
-          );
-        }
-      } else if (action === 'RESET_PASS') {
-        const idx = users.findIndex((u) => u.id === payload.id);
-        if (idx !== -1) {
-          users[idx].password = payload.newPassword;
-          recordLog(actor, 'ADMIN_PASSWORD_RESET', users[idx].email, 'Owner reset account password');
-        }
-      }
-
-      write(STORAGE_KEYS.USERS, users);
-      return users;
+    async manageUsers(action,payload,actor) {
+      return request('manage_users',{userAction:action,payload,actor});
     },
-
-    // 5. AUDIT LOGS (OWNER ONLY)
-    async getLogs() {
-      await delay(40);
-      return read(STORAGE_KEYS.LOGS, []);
-    },
-
-    // Theme persistence
-    getTheme() {
-      return localStorage.getItem(STORAGE_KEYS.THEME) || 'light';
-    },
-    setTheme(theme) {
-      localStorage.setItem(STORAGE_KEYS.THEME, theme);
-    }
+    async getLogs() { return request('get_logs'); },
+    getTheme() { return localStorage.getItem('bs_theme_v1') || 'light'; },
+    setTheme(theme) { localStorage.setItem('bs_theme_v1',theme); }
   };
 })();
 
@@ -620,25 +168,6 @@ function bindGlobalEvents() {
   document.querySelectorAll('.backToLoginBtn').forEach((btn) =>
     btn.addEventListener('click', () => switchAuthForm('login'))
   );
-
-  // Demo Login Buttons
-  document.getElementById('demoOwnerBtn').addEventListener('click', async () => {
-    try {
-      const user = await ApiService.login('owner@bookstoriaga.ph', 'password123');
-      await enterWorkspace(user);
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
-  document.getElementById('demoStaffBtn').addEventListener('click', async () => {
-    try {
-      const user = await ApiService.login('staff@bookstoriaga.ph', 'password123');
-      await enterWorkspace(user);
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
 
   // Standard Login Submit
   document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -1913,6 +1442,7 @@ window.openSupplierFormModal = function (supId) {
   const existing = supId ? State.suppliers.find((s) => s.id === supId) : null;
   const selectedTags = existing ? existing.tags : [];
 
+
   openModal(`
     <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 1rem;">${existing ? 'Edit Supplier' : 'Add New Supplier'}</h3>
     <form id="supplierModalForm">
@@ -1929,12 +1459,15 @@ window.openSupplierFormModal = function (supId) {
       <div class="flex gap-2">
         <div class="input-group w-full">
           <label>Phone Number</label>
-          <input type="text" id="fSupPhone" class="form-control" value="${existing ? escapeAttr(existing.phone) : '+63 917 '}" required />
+          <input type="text" id="fSupPhone" class="form-control" value="${existing ? escapeAttr(existing.phone) : '+63 '}" maxlength="13" required />
         </div>
         <div class="input-group w-full">
           <label>Email</label>
           <input type="email" id="fSupEmail" class="form-control" value="${existing ? escapeAttr(existing.email) : ''}" required />
         </div>
+      </div>
+      <div class="input-group"> <label>Lead Time (Days)</label> 
+        <input type="number" id="fSupLead" class="form-control" min="1" value="${existing ? existing.leadDays || 1 : 1}" required />
       </div>
       <div class="input-group">
         <label>Supplied Categories</label>
@@ -1952,8 +1485,11 @@ window.openSupplierFormModal = function (supId) {
         </div>
       </div>
       <div class="flex justify-end gap-2" style="margin-top: 1.15rem;">
-        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save Supplier</button>
+        ${existing ? `<button type="button" id="deleteSupplierBtn" class="btn btn-danger btn-sm">Delete</button>` : ''}
+        <div class="flex gap-2">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Supplier</button>
+        </div>
       </div>
     </form>
   `);
@@ -1977,6 +1513,31 @@ window.openSupplierFormModal = function (supId) {
     await refreshAllData();
     showToast(existing ? 'Supplier updated' : 'Supplier added');
   });
+
+  const deleteSupplierBtn = document.getElementById('deleteSupplierBtn');
+  if (deleteSupplierBtn && existing) {
+    deleteSupplierBtn.addEventListener('click', async () => {
+      const linkedBooks = State.inventory.filter((item) => item.supplierId === existing.id).length;
+      const confirmation = linkedBooks
+        ? `Delete "${existing.name}"? ${linkedBooks} linked book(s) will remain in inventory but become unassigned.`
+        : `Delete "${existing.name}"? This action cannot be undone.`;
+      if (!window.confirm(confirmation)) return;
+
+      deleteSupplierBtn.disabled = true;
+      try {
+        const result = await ApiService.deleteSupplier(existing.id, actorString());
+        closeModal();
+        await refreshAllData();
+        const unassigned = Number(result?.unassignedItems || 0);
+        showToast(unassigned
+          ? `Supplier deleted. ${unassigned} book(s) are now unassigned.`
+          : 'Supplier deleted');
+      } catch (err) {
+        deleteSupplierBtn.disabled = false;
+        showToast(err.message);
+      }
+    });
+  }
 };
 
 // ============================================================================
@@ -2011,6 +1572,7 @@ function renderUsers() {
                   </button>`
                 : ''
             }
+
           </div>
         </div>
       `;
@@ -2042,7 +1604,7 @@ window.openUserFormModal = function (userId) {
         !existing
           ? `<div class="input-group">
               <label>Initial Password</label>
-              <input type="password" id="fUserPass" class="form-control" value="password123" minlength="6" required />
+              <input type="password" id="fUserPass" class="form-control" value="" minlength="6" required />
             </div>`
           : ''
       }

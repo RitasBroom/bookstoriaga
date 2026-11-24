@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css" />
 
 </head>
 <body>
@@ -27,25 +27,18 @@
       <form id="loginForm">
         <div class="input-group">
           <label for="loginEmail">Email Address</label>
-          <input type="email" id="loginEmail" class="form-control" placeholder="owner@bookstoriaga.ph" required />
+          <input type="email" id="loginEmail" class="form-control" required />
         </div>
         <div class="input-group">
           <div class="flex justify-between items-center">
             <label for="loginPassword">Password</label>
             <button type="button" id="goToForgotBtn" class="text-xs font-semibold" style="color: var(--accent-primary);">Forgot Password?</button>
           </div>
-          <input type="password" id="loginPassword" class="form-control" placeholder="••••••••" required />
+          <input type="password" id="loginPassword" class="form-control" required />
           <button type="button" id="toggleLoginPasswordBtn" class="text-xs font-semibold" aria-pressed="false" style="align-self: flex-end; color: var(--accent-primary);">View password</button>
         </div>
         <button type="submit" class="btn btn-primary w-full" style="margin-top: 0.5rem;">Sign In to Workspace</button>
 
-        <div class="demo-login-box">
-          <p class="text-xs text-muted font-semibold" style="text-align: center; margin-bottom: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;">Quick Demo Access</p>
-          <div class="flex gap-2">
-            <button type="button" id="demoOwnerBtn" class="btn btn-outline btn-sm w-full">Demo Owner</button>
-            <button type="button" id="demoStaffBtn" class="btn btn-secondary btn-sm w-full">Demo Staff</button>
-          </div>
-        </div>
       </form>
 
       <!-- Forgot Password Form -->
