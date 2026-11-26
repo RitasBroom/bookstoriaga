@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bookstoriaga — Inventory & POS System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ========================================================================
+       LOGGED-IN WORKSPACE SHELL (Protected by PHP Session + 401 Failsafe)
+       ======================================================================== -->
+  <div id="appShell" class="hidden">
+    <!-- Darkening backdrop when notification dropdown is open -->
+    <div id="notifBackdrop" class="notif-backdrop hidden"></div>
+
+    <!-- Top Header -->
+    <header class="app-header">
+      <button
+        type="button"
+        class="btn btn-secondary btn-icon mobile-nav-toggle"
+        id="mobileNavToggle"
+        aria-label="Open navigation"
+        aria-controls="leftSidebar"
+        aria-expanded="false"
+        onclick="document.getElementById('appShell').classList.toggle('mobile-nav-open'); this.setAttribute('aria-expanded', document.getElementById('appShell').classList.contains('mobile-nav-open'));"
+      >☰</button>
+      <div class="header-brand">
+        <div class="header-brand-icon">BS</div>
+        <div>
+          <div class="font-bold" style="font-size: 1.02rem; line-height: 1.2;">Bookstoriaga</div>
+          <div class="text-xs text-muted" id="headerUserGreeting">Welcome back</div>
+        </div>
+      </div>
+
+      <!-- Right Controls: Role Pill + Notification Bell -->
+      <div class="flex items-center gap-2">
+        <span class="pill pill-accent" id="headerRoleBadge">Owner</span>
+
+        <!-- Notification Bell Icon -->
+        <div class="notif-wrapper">
+          <button id="notifBellBtn" class="btn btn-secondary btn-icon" title="Low Stock Notifications" aria-label="Low Stock Notifications">
+            <img class="header-action-icon" src="assets/icons/Notifications.png" alt="" />
+            <span id="notifBadge" class="notif-badge hidden">0</span>
+          </button>
+
+          <div id="notifDropdown" class="notif-dropdown hidden">
+            <div class="flex justify-between items-center" style="padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--border-color); background: var(--bg-surface-alt);">
+              <span class="font-bold text-sm">Low-Stock Alerts</span>
+              <span class="pill pill-warning text-xs" id="notifCountLabel">0 alerts</span>
+            </div>
+            <div id="notifList" class="notif-list-scroll"></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Body Layout with Collapsible Left Sidebar -->
+    <div class="app-body-layout">
+      <aside
+        class="left-sidebar"
+        id="leftSidebar"
+        onclick="document.getElementById('appShell').classList.remove('mobile-nav-open'); document.getElementById('mobileNavToggle').setAttribute('aria-expanded', 'false');"
+      >
+        <nav class="flex flex-col gap-1" id="mainNavTabs">
+          <button type="button" class="nav-tab" id="sidebarToggleBtn" title="Collapse Navigation">
+            <span class="nav-short-badge"><img class="sidebar-icon" id="sidebarToggleIcon" src="assets/icons/Collapse.png" alt="" /></span>
+            <span class="nav-label">Collapse Menu</span>
+          </button>
+          <button class="nav-tab active" data-tab="dashboard" title="Dashboard">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Dashboard.png" alt="" /></span>
+            <span class="nav-label">Dashboard</span>
+          </button>
+          <button class="nav-tab" data-tab="inventory" title="Inventory Management">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Inventory%20Management.png" alt="" /></span>
+            <span class="nav-label">Inventory Management</span>
+          </button>
+          <button class="nav-tab" data-tab="suppliers" title="Supplier Management">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Supplier%20Management.png" alt="" /></span>
+            <span class="nav-label">Supplier Management</span>
+          </button>
+          <button class="nav-tab owner-only" data-tab="users" title="User Management">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/User%20Management.png" alt="" /></span>
+            <span class="nav-label">User Management</span>
+          </button>
+          <button class="nav-tab owner-only" data-tab="logs" title="Audit Logs">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Audit%20Log.png" alt="" /></span>
+            <span class="nav-label">Audit Logs</span>
+          </button>
+          <button class="nav-tab" data-tab="settings" title="Settings">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Settings.png" alt="" /></span>
+            <span class="nav-label">Settings</span>
+          </button>
+        </nav>
+
+        <!-- Bottom Sidebar Controls: Book Mode, Dark Mode, Log Out -->
+        <div class="sidebar-footer">
+          <button type="button" class="nav-tab" id="sidebarBookModeBtn" title="Toggle Book Cover Mode">
+            <span class="nav-short-badge"><img class="sidebar-icon" src="assets/icons/Book%20Mode.png" alt="" /></span>
+            <span class="nav-label">Book Mode</span>
+            <span class="toggle-switch" id="sidebarBookModeSwitch"></span>
+          </button>
+          <button type="button" class="nav-tab" id="sidebarThemeToggleBtn" title="Toggle Dark Mode">
+            <span class="nav-short-badge"><img class="sidebar-icon" id="sidebarThemeIcon" src="assets/icons/Light%20Mode.png" alt="" /></span>
+            <span class="nav-label">Dark Mode</span>
+            <span class="toggle-switch" id="sidebarThemeSwitch"></span>
+          </button>
+          <button type="button" class="nav-tab" id="sidebarLogoutBtn" title="Log Out" style="color: var(--status-danger);">
+            <span class="nav-short-badge" style="background: var(--status-danger-bg); color: var(--status-danger);"><img class="sidebar-icon" src="assets/icons/Log%20Out.png" alt="" /></span>
+            <span class="nav-label">Log Out</span>
+          </button>
+        </div>
+      </aside>
+      <button
+        type="button"
+        class="mobile-nav-backdrop"
+        id="mobileNavBackdrop"
+        aria-label="Close navigation"
+        onclick="document.getElementById('appShell').classList.remove('mobile-nav-open'); document.getElementById('mobileNavToggle').setAttribute('aria-expanded', 'false');"
+      ></button>
+
+      <!-- Main Workspace -->
+      <main class="main-content">
+
+        <!-- ====================================================================
+             MODULE 3: DASHBOARD
+             ==================================================================== -->
+        <section id="tab-dashboard" class="tab-section">
+          <div class="flex justify-between items-center" style="margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+              <h2 style="font-size: 1.35rem; font-weight: 800;">Shop Overview</h2>
+              <p class="text-sm text-secondary">Real-time manga, graphic novel, and bookshop performance</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="switchTab('inventory')">+ New Sale / Restock</button>
+          </div>
+
+          <!-- KPI Cards -->
+          <div class="kpi-grid">
+            <div class="card kpi-card owner-only">
+              <span class="text-xs font-bold text-muted" style="text-transform: uppercase;">Gross Revenue</span>
+              <span class="kpi-value" id="kpiSales">₱0.00</span>
+              <span class="text-xs text-secondary">Total completed customer sales</span>
+            </div>
+            <div class="card kpi-card owner-only">
+              <span class="text-xs font-bold text-muted" style="text-transform: uppercase;">Net Profit</span>
+              <span class="kpi-value" style="color: var(--status-success);" id="kpiProfit">₱0.00</span>
+              <span class="text-xs text-secondary">Revenue minus supplier cost</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="text-xs font-bold text-muted" style="text-transform: uppercase;">Total Units in Stock</span>
+              <span class="kpi-value" id="kpiTotalUnits">0</span>
+              <span class="text-xs text-secondary" id="kpiCatalogCount">Across 0 book titles</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="text-xs font-bold text-muted" style="text-transform: uppercase;">Low Stock Watchlist</span>
+              <span class="kpi-value" style="color: var(--status-warning);" id="kpiLowStockCount">0</span>
+              <span class="text-xs text-secondary">Items at or below reorder threshold</span>
+            </div>
+          </div>
+
+          <!-- Row 1: Low Stock Levels & Top 5 Suppliers Side by Side -->
+          <div class="dashboard-pair-grid" style="margin-bottom: 1.35rem;">
+            <!-- Low Stock Levels Visuals (Capped at 5 lowest) -->
+            <div class="card">
+              <div class="flex justify-between items-center" style="margin-bottom: 0.5rem; gap: 0.5rem;">
+                <div>
+                  <h3 class="font-bold" style="font-size: 1.05rem;">Low Stock Levels</h3>
+                  <p class="text-xs text-secondary">Lowest 5 titles by remaining stock</p>
+                </div>
+                <span class="pill pill-warning">Lowest 5</span>
+              </div>
+              <div id="lowStockBarChart" class="css-bar-chart"></div>
+            </div>
+
+            <!-- Top 5 Suppliers (From Audit Log Restocked Books) -->
+            <div class="card">
+              <div class="flex justify-between items-center" style="margin-bottom: 1rem; gap: 0.5rem;">
+                <div>
+                  <h3 class="font-bold" style="font-size: 1.05rem;">Top 5 Suppliers</h3>
+                  <p class="text-xs text-secondary">Ranked by books restocked in audit logs</p>
+                </div>
+                <span class="pill pill-info">Top 5</span>
+              </div>
+              <div id="topSuppliersList" class="flex flex-col gap-2"></div>
+            </div>
+          </div>
+
+          <!-- Row 2: Sales & Profit Performance & Bestsellers Side by Side -->
+          <div class="dashboard-sales-grid">
+            <!-- Sales & Profit Line Chart -->
+            <div class="card">
+              <div class="flex justify-between items-center" style="margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.75rem;">
+                <div>
+                  <h3 class="font-bold" style="font-size: 1.05rem;">Sales & Profit Performance</h3>
+                  <p class="text-xs text-secondary" id="salesChartSubtitle">Daily gross revenue and net profit trend</p>
+                </div>
+                <div class="flex items-center gap-2" style="flex-wrap: wrap;">
+                  <div class="chart-legend">
+                    <span class="legend-item">
+                      <span class="legend-dot" style="background: var(--accent-primary);"></span>
+                      <span>Gross Revenue</span>
+                    </span>
+                    <span class="legend-item owner-only">
+                      <span class="legend-dot" style="background: var(--status-success);"></span>
+                      <span>Net Profit</span>
+                    </span>
+                  </div>
+                  <div class="period-tabs" id="salesChartPeriodTabs">
+                    <button type="button" class="sub-tab active" data-days="7">7D</button>
+                    <button type="button" class="sub-tab" data-days="14">14D</button>
+                    <button type="button" class="sub-tab" data-days="30">30D</button>
+                  </div>
+                </div>
+              </div>
+              <div id="salesProfitChartReadout" class="chart-readout text-xs text-secondary"></div>
+              <div id="salesProfitChart" class="line-chart-container"></div>
+            </div>
+
+            <!-- Bestsellers Filtered by Day / Week / Month / Year -->
+            <div class="card">
+              <div class="flex justify-between items-center" style="margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                  <h3 class="font-bold" style="font-size: 1.05rem;">Bestsellers</h3>
+                  <p class="text-xs text-secondary">Top-moving books & manga volumes</p>
+                </div>
+                <div class="period-tabs" id="bestsellerPeriodTabs">
+                  <button class="sub-tab active" data-period="day">Day</button>
+                  <button class="sub-tab" data-period="week">Week</button>
+                  <button class="sub-tab" data-period="month">Month</button>
+                  <button class="sub-tab" data-period="year">Year</button>
+                </div>
+              </div>
+              <div id="bestsellersList" class="flex flex-col gap-2"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================================
+             MODULE 4: INVENTORY MANAGEMENT & RECEIPT POS CART
+             ==================================================================== -->
+        <section id="tab-inventory" class="tab-section hidden">
+          <div class="flex justify-between items-center" style="margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+              <h2 style="font-size: 1.35rem; font-weight: 800;">Inventory Management</h2>
+              <p class="text-sm text-secondary">Manage manga volumes, books, tags, suppliers, and process sales or restocks</p>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary btn-sm" id="openAddItemModalBtn">+ Add New Book</button>
+            </div>
+          </div>
+
+          <!-- Flush Sub-tabs: Books vs Tags -->
+          <div class="flush-sub-tabs">
+            <button class="sub-tab active" data-inv-sub="catalog">Books</button>
+            <button class="sub-tab" data-inv-sub="tags">Tags</button>
+          </div>
+
+          <!-- SUB-TAB A: BOOKS + SIDE RECEIPT CART -->
+          <div id="invSubCatalog" class="inventory-layout receipt-hidden">
+            <button type="button" class="mobile-receipt-toggle hidden" id="mobileReceiptToggle" aria-controls="receiptCart" aria-expanded="false">
+              <span><span id="mobileReceiptItemCount">View Receipt</span></span>
+              <strong id="mobileReceiptTotalAmount">₱0.00</strong>
+            </button>
+            <button type="button" class="mobile-receipt-backdrop hidden" id="mobileReceiptBackdrop" aria-label="Close receipt"></button>
+            <div>
+              <!-- Flush Search, Sort & Tag Filter Controls -->
+              <div class="flush-filter-section">
+                <div class="flex gap-2" style="flex-wrap: wrap;">
+                  <input type="text" id="invSearchInput" class="form-control form-control-pill" style="flex: 1; min-width: 220px;" placeholder="Search book title, author, SKU, or tag..." />
+                  <select id="invSortSelect" class="form-control form-control-pill" style="width: auto; min-width: 185px;">
+                    <option value="title-asc">Sort: Title (A to Z)</option>
+                    <option value="title-desc">Sort: Title (Z to A)</option>
+                    <option value="stock-asc">Sort: Stock (Low to High)</option>
+                    <option value="stock-desc">Sort: Stock (High to Low)</option>
+                    <option value="price-asc">Sort: Price (Low to High)</option>
+                    <option value="price-desc">Sort: Price (High to Low)</option>
+                  </select>
+                </div>
+                <div id="invTagFilterBar" class="tag-filter-bar"></div>
+              </div>
+
+              <!-- Standard Table View (Desktop) -->
+              <div id="inventoryTableContainer" class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Book / Author</th>
+                      <th>Tags</th>
+                      <th>Supplier</th>
+                      <th>Price</th>
+                      <th>Stock</th>
+                      <th style="text-align: right;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="inventoryTableBody"></tbody>
+                </table>
+              </div>
+
+              <!-- Mobile Inventory Cards -->
+              <div id="inventoryMobileCards" class="mobile-cards-list"></div>
+
+              <!-- Book Mode Cover Grid View -->
+              <div id="inventoryBookModeGrid" class="book-cover-grid hidden"></div>
+
+              <!-- Pagination & Page Size Bar -->
+              <div id="inventoryPaginationBar" class="pagination-bar">
+                <div class="flex items-center gap-2">
+                  <label for="invPageSizeSelect" class="text-xs font-semibold text-secondary">Show:</label>
+                  <select id="invPageSizeSelect" class="inline-select" style="padding: 0.28rem 0.65rem;">
+                    <option value="4">4 per page</option>
+                    <option value="6" selected>6 per page</option>
+                    <option value="8">8 per page</option>
+                    <option value="12">12 per page</option>
+                    <option value="20">20 per page</option>
+                  </select>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button type="button" id="invPrevPageBtn" class="btn btn-secondary btn-sm" title="Previous Page" style="padding: 0.32rem 0.75rem;">‹</button>
+                  <span id="invPageIndicator" class="text-xs font-semibold text-secondary">Page 1 of 1</span>
+                  <button type="button" id="invNextPageBtn" class="btn btn-secondary btn-sm" title="Next Page" style="padding: 0.32rem 0.75rem;">›</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Receipt-Style Side Cart -->
+            <aside class="receipt-cart hidden" id="receiptCart">
+              <div class="flex justify-between items-center" style="margin-bottom: 0.75rem;">
+                <h3 class="font-bold" style="font-size: 1.05rem;">Counter Receipt</h3>
+                <div class="flex items-center gap-2">
+                  <button class="text-xs font-semibold text-muted" id="clearCartBtn">Clear All</button>
+                  <button type="button" class="btn btn-secondary btn-icon mobile-receipt-close" id="closeMobileReceiptBtn" aria-label="Close receipt">×</button>
+                </div>
+              </div>
+
+              <!-- Sell vs Restock Mode Switch -->
+              <div class="receipt-mode-switch">
+                <button type="button" id="modeSellBtn" class="receipt-mode-btn active-sell">Sell (POS)</button>
+                <button type="button" id="modeRestockBtn" class="receipt-mode-btn">Restock</button>
+              </div>
+
+              <div class="text-xs text-secondary" id="cartModeHint" style="margin-bottom: 0.65rem;">
+                Selling deducts stock at retail price (₱).
+              </div>
+
+              <hr class="receipt-divider" />
+
+              <!-- Cart Line Items -->
+              <div id="cartItemsList" class="cart-items-list"></div>
+
+              <hr class="receipt-divider" />
+
+              <!-- Totals -->
+              <div class="flex flex-col gap-1" style="margin-bottom: 1rem;">
+                <div class="flex justify-between text-sm text-secondary">
+                  <span>Total Items</span>
+                  <span id="cartTotalQty" class="font-semibold">0</span>
+                </div>
+                <div class="flex justify-between font-bold" style="font-size: 1.15rem; margin-top: 0.25rem;">
+                  <span>Total Amount</span>
+                  <span id="cartTotalAmount" style="color: var(--accent-primary);">₱0.00</span>
+                </div>
+              </div>
+
+              <button id="cartContinueBtn" class="btn btn-primary w-full" disabled>Continue to Review</button>
+            </aside>
+          </div>
+
+          <!-- SUB-TAB B: TAGS -->
+          <div id="invSubTags" class="hidden">
+            <div class="card" style="max-width: 680px;">
+              <h3 class="font-bold" style="font-size: 1.08rem; margin-bottom: 0.35rem;">Manage Book Genre & Category Tags</h3>
+              <p class="text-xs text-secondary" style="margin-bottom: 1rem;">Create, rename, or remove tags used across books and suppliers.</p>
+
+              <form id="addTagForm" class="flex gap-2" style="margin-bottom: 1.25rem;">
+                <input type="text" id="newTagInput" class="form-control form-control-pill" placeholder="e.g., Shonen, Seinen, Light Novel, Artbook..." required />
+                <button type="submit" class="btn btn-primary">+ Create Tag</button>
+              </form>
+
+              <div id="tagsManagementList" class="flex flex-col gap-2"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================================
+             MODULE 5: SUPPLIER MANAGEMENT
+             ==================================================================== -->
+        <section id="tab-suppliers" class="tab-section hidden">
+          <div class="flex justify-between items-center" style="margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+              <h2 style="font-size: 1.35rem; font-weight: 800;">Supplier Management</h2>
+              <p class="text-sm text-secondary">Book distributors, manga publishers, and graphic novel wholesalers</p>
+            </div>
+            <button class="btn btn-primary btn-sm" id="openAddSupplierModalBtn">+ Add Supplier</button>
+          </div>
+
+          <div class="flush-filter-section">
+            <div class="flex gap-2" style="flex-wrap: wrap;">
+              <input type="text" id="supSearchInput" class="form-control form-control-pill" style="flex: 1; min-width: 220px;" placeholder="Search supplier name, contact, or email..." />
+              <select id="supSortSelect" class="form-control form-control-pill" style="width: auto; min-width: 185px;">
+                <option value="name-asc">Sort: Name (A to Z)</option>
+                <option value="name-desc">Sort: Name (Z to A)</option>
+                <option value="lead-asc">Sort: Lead Time (Shortest)</option>
+              </select>
+            </div>
+            <div id="supTagFilterBar" class="tag-filter-bar"></div>
+          </div>
+
+          <div id="suppliersGrid" class="cards-grid"></div>
+        </section>
+
+        <!-- ====================================================================
+             MODULE 6: USER MANAGEMENT (OWNER ONLY)
+             ==================================================================== -->
+        <section id="tab-users" class="tab-section owner-only hidden">
+          <div class="flex justify-between items-center" style="margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+              <h2 style="font-size: 1.35rem; font-weight: 800;">User Management</h2>
+              <p class="text-sm text-secondary">Control role permissions, active statuses, and reset credentials</p>
+            </div>
+            <button class="btn btn-primary btn-sm" id="openAddUserModalBtn">+ Create User</button>
+          </div>
+
+          <div id="usersGrid" class="cards-grid"></div>
+        </section>
+
+        <!-- ====================================================================
+             MODULE 7: AUDIT LOGS (OWNER ONLY)
+             ==================================================================== -->
+        <section id="tab-logs" class="tab-section owner-only hidden">
+          <div class="flex justify-between items-center" style="margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+              <h2 style="font-size: 1.35rem; font-weight: 800;">System Audit Logs</h2>
+              <p class="text-sm text-secondary">Immutable chronological record of all sales, restocks, edits, and account changes</p>
+            </div>
+            <input type="text" id="logSearchInput" class="form-control form-control-pill" style="max-width: 280px;" placeholder="Filter logs..." />
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>User</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="auditLogsTableBody"></tbody>
+            </table>
+          </div>
+
+          <!-- Mobile Audit Log Cards -->
+          <div id="auditLogsMobileCards" class="mobile-cards-list"></div>
+        </section>
+
+        <!-- ====================================================================
+             MODULE 8: SETTINGS
+             ==================================================================== -->
+        <section id="tab-settings" class="tab-section hidden">
+          <h2 style="font-size: 1.35rem; font-weight: 800; margin-bottom: 1.25rem;">Workspace Settings</h2>
+
+          <div class="cards-grid" style="max-width: 820px;">
+            <!-- Profile Customization Card -->
+            <div class="card">
+              <div class="flex justify-between items-center" style="margin-bottom: 0.35rem; gap: 0.5rem;">
+                <h3 class="font-bold" style="font-size: 1.05rem;">Profile Customization</h3>
+                <span id="profileUnsavedBadge" class="pill pill-warning hidden">Unsaved changes</span>
+              </div>
+              <p class="text-sm text-secondary" id="profileHelpText" style="margin-bottom: 1rem;">Update your display name shown across the workspace and audit logs.</p>
+              <form id="profileSettingsForm">
+                <div class="input-group">
+                  <label for="profileNameInput">Display Name</label>
+                  <input type="text" id="profileNameInput" class="form-control" required />
+                </div>
+                <div class="input-group">
+                  <label for="profileEmailDisplay">Account Email</label>
+                  <input type="email" id="profileEmailDisplay" class="form-control" readonly />
+                </div>
+                <button type="submit" id="saveProfileBtn" class="btn btn-primary w-full">Save Profile</button>
+              </form>
+            </div>
+
+            <!-- Change Password Card -->
+            <div class="card">
+              <h3 class="font-bold" style="font-size: 1.05rem; margin-bottom: 0.35rem;">Change Password</h3>
+              <p class="text-sm text-secondary" style="margin-bottom: 1rem;">Update your current account password.</p>
+              <form id="changePasswordForm">
+                <div class="input-group">
+                  <label for="curPassInput">Current Password</label>
+                  <div class="password-field-wrap">
+                    <input type="password" id="curPassInput" class="form-control" required />
+                    <button type="button" class="password-toggle-btn" data-toggle-pass="curPassInput" aria-pressed="false">Show</button>
+                  </div>
+                </div>
+                <div class="input-group">
+                  <label for="newPassInput">New Password</label>
+                  <div class="password-field-wrap">
+                    <input type="password" id="newPassInput" class="form-control" minlength="6" required />
+                    <button type="button" class="password-toggle-btn" data-toggle-pass="newPassInput" aria-pressed="false">Show</button>
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-primary w-full">Update Password</button>
+              </form>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       MODALS (Transaction Confirmation, Book Form, Supplier Form, User Form)
+       ======================================================================== -->
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <div class="modal-card" id="modalContent" style="max-width: 540px;"></div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- ========================================================================
+       JAVASCRIPT: APPLICATION CONTROLLER
+       ======================================================================== -->
+  <script src="app.js"></script>
+</body>
+</html>

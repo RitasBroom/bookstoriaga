@@ -1,14 +1,44 @@
 /**
- * Bookstoriaga PHP/MySQL API adapter.
- * The UI controller below continues to call the same ApiService methods.
+ * ============================================================================
+ * Bookstoriaga PHP/MySQL API Adapter & 401 Failsafe
+ * ============================================================================
+ * Handles all communication with api.php, verifies PHP sessions across the
+ * split Login (index.html) and Workspace (workspace.html) pages, and clears
+ * browser storage if a 401 Unauthorized response occurs.
  */
 const ApiService = (() => {
   const API = 'api.php';
+  const SESSION_KEY = 'bs_session_v1';
+  let currentSession = null;
+  let redirectingToLogin = false;
+
+  function clearBrowserAuthStorage() {
+    currentSession = null;
+    try {
+      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.clear();
+    } catch (_) {
+      // Ignore storage errors in restricted contexts
+    }
+  }
+
+  function triggerAuthFailsafe(reason = 'expired') {
+    clearBrowserAuthStorage();
+    if (redirectingToLogin) return;
+    const isLoginPage = Boolean(document.getElementById('authView'));
+    if (!isLoginPage) {
+      redirectingToLogin = true;
+      const query = reason ? `?reason=${encodeURIComponent(reason)}` : '';
+      window.location.replace(`index.html${query}`);
+    }
+  }
+
   async function request(action, data = {}, coverFile = null) {
     const options = {
       method: 'POST',
       credentials: 'same-origin'
     };
+
     if (coverFile) {
       const formData = new FormData();
       formData.append('action', action);
@@ -18,71 +48,148 @@ const ApiService = (() => {
       formData.append('coverImage', coverFile);
       options.body = formData;
     } else {
-      options.headers = {'Content-Type': 'application/json'};
-      options.body = JSON.stringify({action, ...data});
+      options.headers = { 'Content-Type': 'application/json' };
+      options.body = JSON.stringify({ action, ...data });
     }
+
     const response = await fetch(API, options);
     let result;
-    try { result = await response.json(); }
-    catch (_) { throw new Error('The server returned an invalid response.'); }
-    if (!response.ok || result.success === false) throw new Error(result.message || 'Request failed.');
+    try {
+      result = await response.json();
+    } catch (_) {
+      throw new Error('The server returned an invalid response.');
+    }
+
+    if (response.status === 401) {
+      if (action !== 'login' && action !== 'check_session') {
+        triggerAuthFailsafe('expired');
+      } else {
+        clearBrowserAuthStorage();
+      }
+      throw new Error(result.message || 'Session expired. Please sign in again.');
+    }
+
+    if (!response.ok || result.success === false) {
+      throw new Error(result.message || 'Request failed.');
+    }
+
     return result.data;
   }
-  let currentSession = null;
+
   return {
     init() {},
-    async login(email,password) {
-      const user = await request('login',{email,password});
+
+    clearBrowserAuthStorage,
+    triggerAuthFailsafe,
+
+    async checkSession() {
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (!saved) {
+        currentSession = null;
+        return null;
+      }
+
+      try {
+        // Uses an existing action in api.php that calls requireLogin()
+        await request('get_inventory'); 
+        currentSession = JSON.parse(saved);
+        return currentSession;
+      } catch (err) {
+        // If the PHP session expired, request() triggers a 401 -> triggerAuthFailsafe('expired')
+        clearBrowserAuthStorage();
+        currentSession = null;
+        return null;
+      }
+    },
+
+    async login(email, password) {
+      const user = await request('login', { email, password });
       currentSession = user;
-      localStorage.setItem('bs_session_v1',JSON.stringify(user));
+      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
       return user;
     },
-    async verifyEmailForReset(email) { return request('verify_reset_email',{email}); },
-    async resetPassword(email,newPassword) { return request('reset_password',{email,newPassword}); },
-    async changePassword(userId,currentPassword,newPassword) {
-      return request('change_password',{userId,currentPassword,newPassword});
+
+    async changePassword(userId, currentPassword, newPassword) {
+      return request('change_password', { userId, currentPassword, newPassword });
     },
-    async updateProfile(userId,newName) {
-      const user = await request('update_profile',{userId,newName});
+
+    async updateProfile(userId, newName) {
+      const user = await request('update_profile', { userId, newName });
       currentSession = user;
-      localStorage.setItem('bs_session_v1',JSON.stringify(user));
+      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
       return user;
     },
+
     getSession() {
       if (currentSession) return currentSession;
-      try { return JSON.parse(localStorage.getItem('bs_session_v1') || 'null'); }
-      catch (_) { return null; }
+      try {
+        return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      } catch (_) {
+        return null;
+      }
     },
-    logout() {
-      currentSession = null;
-      localStorage.removeItem('bs_session_v1');
-      request('logout').catch(()=>{});
+
+    setSession(user) {
+      currentSession = user;
+      if (user) {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+      } else {
+        localStorage.removeItem(SESSION_KEY);
+      }
     },
-    async getInventory() { return request('get_inventory'); },
-    async saveInventoryItem(itemData,actor,coverFile) {
-      return request('save_inventory_item',{itemData,actor},coverFile);
+
+    async logout() {
+      clearBrowserAuthStorage();
+      try {
+        await request('logout');
+      } catch (_) {
+        // Proceed with client logout even if server session already ended
+      }
     },
-    async deleteInventoryItem(itemId,actor) {
-      return request('delete_inventory_item',{itemId,actor});
+
+    async getInventory() {
+      return request('get_inventory');
     },
-    async manageTags(action,payload,actor) {
-      return request('manage_tags',{tagAction:action,payload,actor});
+
+    async saveInventoryItem(itemData, actor, coverFile) {
+      return request('save_inventory_item', { itemData, actor }, coverFile);
     },
-    async saveSupplier(supData,actor) {
-      return request('save_supplier',{supData,actor});
+
+    async deleteInventoryItem(itemId, actor) {
+      return request('delete_inventory_item', { itemId, actor });
     },
-    async deleteSupplier(supplierId,actor) {
-      return request('delete_supplier',{supplierId,actor});
+
+    async manageTags(action, payload, actor) {
+      return request('manage_tags', { tagAction: action, payload, actor });
     },
-    async submitTransaction(payload,actor) {
-      return request('submit_transaction',{payload,actor});
+
+    async saveSupplier(supData, actor) {
+      return request('save_supplier', { supData, actor });
     },
-    async manageUsers(action,payload,actor) {
-      return request('manage_users',{userAction:action,payload,actor});
+
+    async deleteSupplier(supplierId, actor) {
+      return request('delete_supplier', { supplierId, actor });
     },
-    async getLogs() { return request('get_logs'); },
-    getTheme() { return localStorage.getItem('bs_theme_v1') || 'light'; },
-    setTheme(theme) { localStorage.setItem('bs_theme_v1',theme); }
+
+    async submitTransaction(payload, actor) {
+      return request('submit_transaction', { payload, actor });
+    },
+
+    async manageUsers(action, payload, actor) {
+      return request('manage_users', { userAction: action, payload, actor });
+    },
+
+    async getLogs() {
+      return request('get_logs');
+    },
+
+    getTheme() {
+      return localStorage.getItem('bs_theme_v1') || 'light';
+    },
+
+    setTheme(theme) {
+      localStorage.setItem('bs_theme_v1', theme);
+    }
   };
 })();
 
@@ -100,9 +207,11 @@ const State = {
   tags: [],
   suppliers: [],
   transactions: [],
+  restockLogs: [],
   users: [],
   logs: [],
   // Filters & Sorting
+  salesChartDays: 7,
   bestsellerPeriod: 'day',
   invSearch: '',
   invTagFilter: [],
@@ -127,6 +236,7 @@ const formatPHP = (num) =>
 
 function showToast(message) {
   const container = document.getElementById('toastContainer');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.textContent = message;
@@ -144,88 +254,176 @@ function applyTheme(theme) {
   if (sw) {
     sw.classList.toggle('active', theme === 'dark');
   }
-  document.getElementById('sidebarThemeIcon').src =
-    theme === 'dark' ? 'assets/icons/Dark%20Mode.png' : 'assets/icons/Light%20Mode.png';
+  const icon = document.getElementById('sidebarThemeIcon');
+  if (icon) {
+    icon.src = theme === 'dark' ? 'assets/icons/Dark%20Mode.png' : 'assets/icons/Light%20Mode.png';
+  }
+}
+
+function setNotifDropdownOpen(isOpen) {
+  const drop = document.getElementById('notifDropdown');
+  const backdrop = document.getElementById('notifBackdrop');
+  if (!drop) return;
+  drop.classList.toggle('hidden', !isOpen);
+  if (backdrop) {
+    backdrop.classList.toggle('hidden', !isOpen);
+  }
+  document.body.classList.toggle('notif-open', isOpen);
 }
 
 // ============================================================================
-// BOOTSTRAP & AUTH FLOW
+// BOOTSTRAP: SPLIT LOGIN (index.html) VS WORKSPACE (workspace.html)
 // ============================================================================
 document.addEventListener('DOMContentLoaded', async () => {
   ApiService.init();
   applyTheme(ApiService.getTheme());
 
-  const existingSession = ApiService.getSession();
-  if (existingSession) {
-    await enterWorkspace(existingSession);
+  const authView = document.getElementById('authView');
+  const appShell = document.getElementById('appShell');
+
+  // CASE A: Login Page (index.html)
+  if (authView && !appShell) {
+    bindLoginEvents();
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('reason') === 'expired') {
+      ApiService.clearBrowserAuthStorage();
+      window.history.replaceState({}, '', 'index.html');
+      showToast('Session expired. Please sign in again.');
+    }
+
+    try {
+      const activeUser = await ApiService.checkSession();
+      if (activeUser) {
+        window.location.replace('workspace.html');
+        return;
+      }
+    } catch (_) {
+      ApiService.clearBrowserAuthStorage();
+    }
+    return;
   }
 
-  bindGlobalEvents();
+  // CASE B: Logged-In Workspace Page (workspace.html)
+  if (appShell) {
+    try {
+      const verifiedUser = await ApiService.checkSession();
+      if (!verifiedUser) {
+        ApiService.triggerAuthFailsafe('expired');
+        return;
+      }
+      bindWorkspaceEvents();
+      await enterWorkspace(verifiedUser);
+    } catch (_) {
+      ApiService.triggerAuthFailsafe('expired');
+    }
+  }
 });
 
-function bindGlobalEvents() {
+function bindLoginEvents() {
+  const toggleBtn = document.getElementById('toggleLoginPasswordBtn');
+  const passInput = document.getElementById('loginPassword');
+
+  if (toggleBtn && passInput) {
+    toggleBtn.addEventListener('click', () => {
+      const isHidden = passInput.type === 'password';
+      passInput.type = isHidden ? 'text' : 'password';
+      toggleBtn.textContent = isHidden ? 'Hide password' : 'View password';
+      toggleBtn.setAttribute('aria-pressed', String(isHidden));
+    });
+  }
+
+  const loginForm = document.getElementById('loginForm');
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const submitBtn = document.getElementById('loginSubmitBtn');
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        const email = document.getElementById('loginEmail').value;
+        const pass = document.getElementById('loginPassword').value;
+        await ApiService.login(email, pass);
+        window.location.href = 'workspace.html';
+      } catch (err) {
+        if (submitBtn) submitBtn.disabled = false;
+        showToast(err.message);
+      }
+    });
+  }
+}
+
+function bindWorkspaceEvents() {
   const appShell = document.getElementById('appShell');
   const mobileNavButton = document.getElementById('mobileNavToggle');
   const mobileNavSidebar = document.getElementById('leftSidebar');
   const mobileNavBackdrop = document.getElementById('mobileNavBackdrop');
   let mobileNavGesture = null;
 
-  document.addEventListener('touchstart', (event) => {
-    if (
-      !window.matchMedia('(max-width: 768px)').matches ||
-      appShell.classList.contains('hidden') ||
-      event.touches.length !== 1
-    ) {
-      mobileNavGesture = null;
-      return;
-    }
-    const touch = event.touches[0];
-    const menuWasOpen = appShell.classList.contains('mobile-nav-open');
-    if (!menuWasOpen && touch.clientX > 32) {
-      mobileNavGesture = null;
-      return;
-    }
-    mobileNavGesture = {
-      startX: touch.clientX,
-      startY: touch.clientY,
-      menuWasOpen,
-      drawerWidth: mobileNavSidebar.getBoundingClientRect().width,
-      offset: menuWasOpen ? 0 : -mobileNavSidebar.getBoundingClientRect().width,
-      active: false
-    };
-  }, {passive: true});
-
-  document.addEventListener('touchmove', (event) => {
-    if (!mobileNavGesture || event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    const deltaX = touch.clientX - mobileNavGesture.startX;
-    const deltaY = touch.clientY - mobileNavGesture.startY;
-
-    if (!mobileNavGesture.active) {
-      if (Math.abs(deltaX) < 6) return;
-      if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) {
-        if (Math.abs(deltaY) >= 6) mobileNavGesture = null;
-        return;
-      }
-      const opening = !mobileNavGesture.menuWasOpen && deltaX > 0;
-      const closing = mobileNavGesture.menuWasOpen && deltaX < 0;
-      if (!opening && !closing) {
+  // Edge-swipe gesture support for mobile navigation drawer
+  document.addEventListener(
+    'touchstart',
+    (event) => {
+      if (
+        !window.matchMedia('(max-width: 768px)').matches ||
+        appShell.classList.contains('hidden') ||
+        event.touches.length !== 1
+      ) {
         mobileNavGesture = null;
         return;
       }
-      mobileNavGesture.active = true;
-      appShell.classList.add('mobile-nav-open', 'mobile-nav-dragging');
-    }
+      const touch = event.touches[0];
+      const menuWasOpen = appShell.classList.contains('mobile-nav-open');
+      if (!menuWasOpen && touch.clientX > 32) {
+        mobileNavGesture = null;
+        return;
+      }
+      mobileNavGesture = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        menuWasOpen,
+        drawerWidth: mobileNavSidebar.getBoundingClientRect().width,
+        offset: menuWasOpen ? 0 : -mobileNavSidebar.getBoundingClientRect().width,
+        active: false
+      };
+    },
+    { passive: true }
+  );
 
-    event.preventDefault();
-    const width = mobileNavGesture.drawerWidth;
-    mobileNavGesture.offset = mobileNavGesture.menuWasOpen
-      ? Math.max(-width, Math.min(0, deltaX))
-      : Math.max(-width, Math.min(0, -width + deltaX));
-    const openProgress = (mobileNavGesture.offset + width) / width;
-    mobileNavSidebar.style.transform = `translateX(${mobileNavGesture.offset}px)`;
-    mobileNavBackdrop.style.opacity = String(openProgress);
-  }, {passive: false});
+  document.addEventListener(
+    'touchmove',
+    (event) => {
+      if (!mobileNavGesture || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - mobileNavGesture.startX;
+      const deltaY = touch.clientY - mobileNavGesture.startY;
+
+      if (!mobileNavGesture.active) {
+        if (Math.abs(deltaX) < 6) return;
+        if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) {
+          if (Math.abs(deltaY) >= 6) mobileNavGesture = null;
+          return;
+        }
+        const opening = !mobileNavGesture.menuWasOpen && deltaX > 0;
+        const closing = mobileNavGesture.menuWasOpen && deltaX < 0;
+        if (!opening && !closing) {
+          mobileNavGesture = null;
+          return;
+        }
+        mobileNavGesture.active = true;
+        appShell.classList.add('mobile-nav-open', 'mobile-nav-dragging');
+      }
+
+      event.preventDefault();
+      const width = mobileNavGesture.drawerWidth;
+      mobileNavGesture.offset = mobileNavGesture.menuWasOpen
+        ? Math.max(-width, Math.min(0, deltaX))
+        : Math.max(-width, Math.min(0, -width + deltaX));
+      const openProgress = (mobileNavGesture.offset + width) / width;
+      mobileNavSidebar.style.transform = `translateX(${mobileNavGesture.offset}px)`;
+      mobileNavBackdrop.style.opacity = String(openProgress);
+    },
+    { passive: false }
+  );
 
   const finishMobileNavGesture = (cancelled) => {
     if (!mobileNavGesture) return;
@@ -243,127 +441,68 @@ function bindGlobalEvents() {
     mobileNavButton.setAttribute('aria-expanded', String(shouldRemainOpen));
   };
 
-  document.addEventListener('touchend', () => {
-    finishMobileNavGesture(false);
-  }, {passive: true});
+  document.addEventListener('touchend', () => finishMobileNavGesture(false), { passive: true });
+  document.addEventListener('touchcancel', () => finishMobileNavGesture(true), { passive: true });
 
-  document.addEventListener('touchcancel', () => {
-    finishMobileNavGesture(true);
-  }, {passive: true});
-
-  // Auth View Toggles
-  document.getElementById('goToForgotBtn').addEventListener('click', () => switchAuthForm('forgot'));
-  document.getElementById('toggleLoginPasswordBtn').addEventListener('click', () => {
-    document.getElementById('loginPassword').type =
-      document.getElementById('loginPassword').type === 'password' ? 'text' : 'password';
-    document.getElementById('toggleLoginPasswordBtn').textContent =
-      document.getElementById('loginPassword').type === 'password' ? 'View password' : 'Hide password';
-    document.getElementById('toggleLoginPasswordBtn').setAttribute(
-      'aria-pressed',
-      document.getElementById('loginPassword').type === 'text'
-    );
-  });
-  document.querySelectorAll('.backToLoginBtn').forEach((btn) =>
-    btn.addEventListener('click', () => switchAuthForm('login'))
-  );
-
-  // Standard Login Submit
-  document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const email = document.getElementById('loginEmail').value;
-      const pass = document.getElementById('loginPassword').value;
-      const user = await ApiService.login(email, pass);
-      await enterWorkspace(user);
-    } catch (err) {
-      showToast(err.message);
-    }
+  // Delegated handler for all .password-toggle-btn[data-toggle-pass] buttons
+  document.addEventListener('click', (e) => {
+    const toggleBtn = e.target.closest('[data-toggle-pass]');
+    if (!toggleBtn) return;
+    const targetInput = document.getElementById(toggleBtn.dataset.togglePass);
+    if (!targetInput) return;
+    const reveal = targetInput.type === 'password';
+    targetInput.type = reveal ? 'text' : 'password';
+    toggleBtn.textContent = reveal ? 'Hide' : 'Show';
+    toggleBtn.setAttribute('aria-pressed', String(reveal));
   });
 
-  // Forgot Password Submit
-  document.getElementById('forgotForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const email = document.getElementById('forgotEmail').value;
-      const verifiedEmail = await ApiService.verifyEmailForReset(email);
-      document.getElementById('resetTargetEmail').textContent = verifiedEmail;
-      switchAuthForm('reset');
-      showToast('Email verified. Choose a new password.');
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
-  // Reset Password Submit
-  document.getElementById('resetForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('resetTargetEmail').textContent;
-    const p1 = document.getElementById('newResetPass').value;
-    const p2 = document.getElementById('confirmResetPass').value;
-    if (p1 !== p2) return showToast('Passwords do not match.');
-    try {
-      await ApiService.resetPassword(email, p1);
-      const user = await ApiService.login(email, p1);
-      showToast('Password updated!');
-      await enterWorkspace(user);
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
-  // Collapsible Left Sidebar Toggle (Above the main navigation tabs)
+  // Collapsible Left Sidebar Toggle
   document.getElementById('sidebarToggleBtn').addEventListener('click', () => {
     State.sidebarCollapsed = !State.sidebarCollapsed;
     document.getElementById('leftSidebar').classList.toggle('collapsed', State.sidebarCollapsed);
   });
 
-  // Book Mode Toggle (Switches Inventory Management to Cover Image Grid & jumps to Inventory)
+  // Book Mode Toggle (Keeps current page without switching to Inventory Management)
   document.getElementById('sidebarBookModeBtn').addEventListener('click', () => {
     State.bookMode = !State.bookMode;
     document.getElementById('sidebarBookModeSwitch').classList.toggle('active', State.bookMode);
-    if (State.activeTab !== 'inventory') {
-      switchTab('inventory');
-    }
-    // Ensure Books sub-tab is visible
-    document.querySelectorAll('[data-inv-sub]').forEach((b) => b.classList.toggle('active', b.dataset.invSub === 'catalog'));
-    document.getElementById('invSubCatalog').classList.remove('hidden');
-    document.getElementById('invSubTags').classList.add('hidden');
     renderInventoryTable();
     showToast(State.bookMode ? 'Book Mode enabled (Cover Grid)' : 'Book Mode disabled (Table View)');
   });
 
-  // Sidebar Dark Mode Simple Toggle
+  // Sidebar Dark Mode Toggle
   document.getElementById('sidebarThemeToggleBtn').addEventListener('click', () => {
     const next = ApiService.getTheme() === 'light' ? 'dark' : 'light';
     applyTheme(next);
     showToast(next === 'dark' ? 'Dark Roast Espresso enabled' : 'Oat Latte Light enabled');
   });
 
-  // Sidebar Log Out Button
+  // Sidebar Log Out Button (Compact, centered confirmation modal)
   document.getElementById('sidebarLogoutBtn').addEventListener('click', () => {
     openModal(`
-      <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 0.5rem;">Log Out</h3>
-      <p class="text-sm text-secondary" style="margin-bottom: 1.25rem;">Are you sure you want to log out of your account?</p>
-      <div class="flex justify-end gap-2">
-        <button type="button" class="btn btn-secondary" id="cancelLogoutBtn">Cancel</button>
-        <button type="button" class="btn btn-danger" id="confirmLogoutBtn">Log Out</button>
+      <div class="logout-modal-body">
+        <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.35rem;">Log Out</h3>
+        <p class="text-sm text-secondary" style="margin-bottom: 1.2rem;">Are you sure you want to log out of your account?</p>
+        <div class="flex justify-center gap-2 w-full">
+          <button type="button" class="btn btn-secondary" id="cancelLogoutBtn">Cancel</button>
+          <button type="button" class="btn btn-danger" id="confirmLogoutBtn">Log Out</button>
+        </div>
       </div>
     `);
     const logoutBackdrop = document.getElementById('modalBackdrop');
     showConfirmationPrompt(logoutBackdrop, 'logout-confirmation');
 
-    document.getElementById('cancelLogoutBtn').addEventListener('click', () => closeConfirmationPrompt('logout-confirmation'));
+    document.getElementById('cancelLogoutBtn').addEventListener('click', () =>
+      closeConfirmationPrompt('logout-confirmation')
+    );
     document.getElementById('confirmLogoutBtn').addEventListener('click', () => {
-      closeConfirmationPrompt('logout-confirmation', () => {
+      closeConfirmationPrompt('logout-confirmation', async () => {
         closeMobileReceipt();
-        ApiService.logout();
         State.currentUser = null;
         State.sellCart = [];
         State.restockCart = [];
-        document.getElementById('appShell').classList.add('hidden');
-        document.getElementById('authView').classList.remove('hidden');
-        switchAuthForm('login');
-        showToast('Signed out');
+        await ApiService.logout();
+        window.location.replace('index.html');
       });
     });
   });
@@ -373,28 +512,76 @@ function bindGlobalEvents() {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
-  // Notification Bell Dropdown Toggle
+  // Notification Bell Dropdown, Backdrop & Scroll Containment
   const bellBtn = document.getElementById('notifBellBtn');
   const notifDrop = document.getElementById('notifDropdown');
+  const notifBackdrop = document.getElementById('notifBackdrop');
+  const notifList = document.getElementById('notifList');
+
   bellBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    notifDrop.classList.toggle('hidden');
+    setNotifDropdownOpen(notifDrop.classList.contains('hidden'));
   });
 
+  if (notifBackdrop) {
+    notifBackdrop.addEventListener('click', () => setNotifDropdownOpen(false));
+    notifBackdrop.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+  }
+
+  // Prevent scroll chaining at top/bottom bounds of mobile notification list
+  if (notifList) {
+    let notifTouchStartY = 0;
+    notifList.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e.touches.length === 1) {
+          notifTouchStartY = e.touches[0].clientY;
+        }
+      },
+      { passive: true }
+    );
+
+    notifList.addEventListener(
+      'touchmove',
+      (e) => {
+        if (e.touches.length !== 1) return;
+        const currentY = e.touches[0].clientY;
+        const deltaY = currentY - notifTouchStartY;
+        const atTop = notifList.scrollTop <= 0;
+        const atBottom = Math.ceil(notifList.scrollTop + notifList.clientHeight) >= notifList.scrollHeight;
+        const noScrollNeeded = notifList.scrollHeight <= notifList.clientHeight;
+
+        if (noScrollNeeded || (atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
+          e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+  }
+
   document.addEventListener('click', (e) => {
-    if (!notifDrop.contains(e.target) && e.target !== bellBtn) {
-      notifDrop.classList.add('hidden');
+    if (!notifDrop.contains(e.target) && !bellBtn.contains(e.target)) {
+      setNotifDropdownOpen(false);
     }
     if (!e.target.closest('.tag-filter-control')) {
       document.querySelectorAll('.tag-filter-menu').forEach((menu) => menu.classList.add('hidden'));
       document.querySelectorAll('.filter-menu-toggle').forEach((btn) => btn.setAttribute('aria-expanded', 'false'));
     }
-    // Close modal multi-select dropdown when clicking outside
     if (!e.target.closest('.multiselect-wrap') && State.modalMultiSelectOpen) {
       State.modalMultiSelectOpen = false;
       const menu = document.getElementById('modalTagsMenu');
       if (menu) menu.classList.add('hidden');
     }
+  });
+
+  // Dashboard Sales & Profit Chart Period Filter
+  document.querySelectorAll('#salesChartPeriodTabs .sub-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#salesChartPeriodTabs .sub-tab').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      State.salesChartDays = Number(btn.dataset.days) || 7;
+      renderSalesProfitLineChart();
+    });
   });
 
   // Dashboard Bestsellers Filter
@@ -419,7 +606,7 @@ function bindGlobalEvents() {
     });
   });
 
-  // Inventory Search & Sort
+  // Inventory Search, Tag Removal & Sort
   document.getElementById('invSearchInput').addEventListener('input', (e) => {
     State.invSearch = e.target.value;
     State.invPage = 1;
@@ -482,12 +669,12 @@ function bindGlobalEvents() {
   });
   document.getElementById('cartContinueBtn').addEventListener('click', openTransactionConfirmModal);
 
-  // Add Book & Supplier Modals
+  // Add Book, Supplier & User Modals
   document.getElementById('openAddItemModalBtn').addEventListener('click', () => openItemFormModal(null));
   document.getElementById('openAddSupplierModalBtn').addEventListener('click', () => openSupplierFormModal(null));
   document.getElementById('openAddUserModalBtn').addEventListener('click', () => openUserFormModal(null));
 
-  // Supplier Search & Sort
+  // Supplier Search, Tag Removal & Sort
   document.getElementById('supSearchInput').addEventListener('input', (e) => {
     State.supSearch = e.target.value;
     renderSuppliers();
@@ -508,13 +695,17 @@ function bindGlobalEvents() {
   });
 
   // Settings Actions: Profile Customization & Password
+  const profileNameInput = document.getElementById('profileNameInput');
+  profileNameInput.addEventListener('input', updateProfileUnsavedIndicator);
+
   document.getElementById('profileSettingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const newName = document.getElementById('profileNameInput').value;
+      const newName = profileNameInput.value;
       const updatedUser = await ApiService.updateProfile(State.currentUser.id, newName);
       State.currentUser = updatedUser;
       document.getElementById('headerUserGreeting').textContent = `Hi, ${updatedUser.name}`;
+      updateProfileUnsavedIndicator();
       await refreshAllData();
       showToast('Profile name updated');
     } catch (err) {
@@ -536,55 +727,55 @@ function bindGlobalEvents() {
     }
   });
 
-  document.getElementById('resetDemoDataBtn').addEventListener('click', async () => {
-    ApiService.init(true);
-    State.sellCart = [];
-    State.restockCart = [];
-    await refreshAllData();
-    showToast('Demo database restored to defaults');
-  });
-
   // Close Modal on Backdrop Click
   document.getElementById('modalBackdrop').addEventListener('click', (e) => {
     if (e.target.id === 'modalBackdrop') {
-      const confirmationClass = ['logout-confirmation', 'unsaved-profile-confirmation']
-        .find((className) => e.target.classList.contains(className));
-      if (confirmationClass) closeConfirmationPrompt(confirmationClass);
-      else attemptCloseModal();
+      const confirmationClass = ['logout-confirmation', 'unsaved-profile-confirmation'].find((className) =>
+        e.target.classList.contains(className)
+      );
+      if (confirmationClass) {
+        closeConfirmationPrompt(confirmationClass);
+      } else {
+        attemptCloseModal();
+      }
     }
   });
 }
 
-function switchAuthForm(mode) {
-  document.getElementById('loginForm').classList.toggle('hidden', mode !== 'login');
-  document.getElementById('forgotForm').classList.toggle('hidden', mode !== 'forgot');
-  document.getElementById('resetForm').classList.toggle('hidden', mode !== 'reset');
-  const subtitles = {
-    login: 'Library, Manga & Collectibles Inventory',
-    forgot: 'Account Password Recovery',
-    reset: 'Set a New Workspace Password'
-  };
-  document.getElementById('authSubtitle').textContent = subtitles[mode];
-}
-
 const actorString = () => `${State.currentUser.name} (${State.currentUser.role})`;
 
-async function enterWorkspace(user) {
-  State.currentUser = user;
-  document.getElementById('authView').classList.add('hidden');
-  document.getElementById('appShell').classList.remove('hidden');
-
+function applyRolePermissions(user) {
+  const isOwner = user.role === 'Owner';
   document.getElementById('headerUserGreeting').textContent = `Hi, ${user.name}`;
   document.getElementById('headerRoleBadge').textContent = user.role;
   document.getElementById('profileNameInput').value = user.name;
   document.getElementById('profileEmailDisplay').value = user.email;
 
-  // Enforce Role-Based Access Control (Owner Only elements)
-  const isOwner = user.role === 'Owner';
   document.querySelectorAll('.owner-only').forEach((el) => {
     el.classList.toggle('hidden', !isOwner);
   });
 
+  const profileNameInput = document.getElementById('profileNameInput');
+  const saveProfileBtn = document.getElementById('saveProfileBtn');
+  const profileHelpText = document.getElementById('profileHelpText');
+
+  if (isOwner) {
+    profileNameInput.removeAttribute('readonly');
+    saveProfileBtn.classList.remove('hidden');
+    profileHelpText.textContent = 'Update your display name shown across the workspace and audit logs.';
+  } else {
+    profileNameInput.setAttribute('readonly', 'readonly');
+    saveProfileBtn.classList.add('hidden');
+    profileHelpText.textContent = 'Display names are managed by the shop Owner.';
+  }
+  updateProfileUnsavedIndicator();
+}
+
+async function enterWorkspace(user) {
+  State.currentUser = user;
+  document.getElementById('appShell').classList.remove('hidden');
+
+  applyRolePermissions(user);
   await refreshAllData();
   switchTab('dashboard');
 }
@@ -596,11 +787,13 @@ function switchTab(tabName) {
     isProfileCustomizationDirty()
   ) {
     openModal(`
-      <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 0.5rem;">Unsaved Profile Changes</h3>
-      <p class="text-sm text-secondary" style="margin-bottom: 1.25rem;">Your profile customization hasn’t been saved. Leave this page and discard your changes?</p>
-      <div class="flex justify-end gap-2">
-        <button type="button" class="btn btn-secondary" id="cancelLeaveSettingsBtn">Stay</button>
-        <button type="button" class="btn btn-danger" id="discardProfileChangesBtn">Leave Without Saving</button>
+      <div style="text-align: center;">
+        <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.4rem;">Unsaved Profile Changes</h3>
+        <p class="text-sm text-secondary" style="margin-bottom: 1.15rem;">Your profile customization hasn’t been saved. Leave this page and discard your changes?</p>
+        <div class="flex justify-center gap-2">
+          <button type="button" class="btn btn-secondary" id="cancelLeaveSettingsBtn">Stay</button>
+          <button type="button" class="btn btn-danger" id="discardProfileChangesBtn">Leave Without Saving</button>
+        </div>
       </div>
     `);
     const unsavedChangesBackdrop = document.getElementById('modalBackdrop');
@@ -611,6 +804,7 @@ function switchTab(tabName) {
     document.getElementById('discardProfileChangesBtn').addEventListener('click', () => {
       closeConfirmationPrompt('unsaved-profile-confirmation', () => {
         document.getElementById('profileNameInput').value = State.currentUser.name;
+        updateProfileUnsavedIndicator();
         switchTab(tabName);
       });
     });
@@ -631,9 +825,16 @@ function isProfileCustomizationDirty() {
   const profileNameInput = document.getElementById('profileNameInput');
   return Boolean(
     State.currentUser &&
-    profileNameInput &&
-    profileNameInput.value.trim() !== State.currentUser.name
+      State.currentUser.role === 'Owner' &&
+      profileNameInput &&
+      profileNameInput.value.trim() !== State.currentUser.name
   );
+}
+
+function updateProfileUnsavedIndicator() {
+  const badge = document.getElementById('profileUnsavedBadge');
+  if (!badge) return;
+  badge.classList.toggle('hidden', !isProfileCustomizationDirty());
 }
 
 async function refreshAllData() {
@@ -644,6 +845,7 @@ async function refreshAllData() {
   State.supTagFilter = State.supTagFilter.filter((tag) => State.tags.includes(tag));
   State.suppliers = data.suppliers;
   State.transactions = data.transactions;
+  State.restockLogs = data.restockLogs || [];
 
   if (State.currentUser && State.currentUser.role === 'Owner') {
     State.users = await ApiService.manageUsers('LIST');
@@ -661,10 +863,13 @@ async function refreshAllData() {
 }
 
 // ============================================================================
-// MODULE 2: HEADER LOW-STOCK NOTIFICATIONS (JUMP & HIGHLIGHT IN INVENTORY)
+// MODULE 2: HEADER LOW-STOCK NOTIFICATIONS (SORTED BY LOWEST STOCK FIRST)
 // ============================================================================
 function renderNotifications() {
-  const lowItems = State.inventory.filter((item) => item.stock <= item.lowThreshold);
+  const lowItems = State.inventory
+    .filter((item) => item.stock <= item.lowThreshold)
+    .sort((a, b) => a.stock - b.stock || a.title.localeCompare(b.title));
+
   const badge = document.getElementById('notifBadge');
   const countLabel = document.getElementById('notifCountLabel');
   const list = document.getElementById('notifList');
@@ -694,21 +899,20 @@ function renderNotifications() {
 }
 
 window.jumpToInventoryItem = function (itemId) {
-  document.getElementById('notifDropdown').classList.add('hidden');
-  // Reset filters so item is guaranteed visible
+  setNotifDropdownOpen(false);
   State.invSearch = '';
   State.invTagFilter = [];
   document.getElementById('invSearchInput').value = '';
 
-  // Jump to the page containing the target item
   const sortedAll = [...State.inventory].sort((a, b) => a.title.localeCompare(b.title));
   State.invSort = 'title-asc';
   document.getElementById('invSortSelect').value = 'title-asc';
   const targetIdx = sortedAll.findIndex((i) => i.id === itemId);
   State.invPage = targetIdx !== -1 ? Math.floor(targetIdx / State.invPageSize) + 1 : 1;
 
-  // Ensure Books sub-tab is active
-  document.querySelectorAll('[data-inv-sub]').forEach((b) => b.classList.toggle('active', b.dataset.invSub === 'catalog'));
+  document.querySelectorAll('[data-inv-sub]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.invSub === 'catalog')
+  );
   document.getElementById('invSubCatalog').classList.remove('hidden');
   document.getElementById('invSubTags').classList.add('hidden');
 
@@ -716,18 +920,20 @@ window.jumpToInventoryItem = function (itemId) {
   renderInventoryModule();
 
   requestAnimationFrame(() => {
-    const row = document.getElementById(`inv-row-${itemId}`);
-    if (row) {
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      row.classList.remove('row-highlighted');
-      void row.offsetWidth;
-      row.classList.add('row-highlighted');
+    const targetEl =
+      document.getElementById(`inv-row-${itemId}`) ||
+      document.getElementById(`inv-mobile-card-${itemId}`);
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      targetEl.classList.remove('row-highlighted');
+      void targetEl.offsetWidth;
+      targetEl.classList.add('row-highlighted');
     }
   });
 };
 
 // ============================================================================
-// MODULE 3: DASHBOARD RENDERING
+// MODULE 3: DASHBOARD RENDERING (KPIs, LINE CHART, LOW 5, BESTSELLERS, TOP 5 SUPPLIERS)
 // ============================================================================
 function renderDashboard() {
   const salesTxs = State.transactions.filter((t) => t.type === 'SELL');
@@ -742,18 +948,169 @@ function renderDashboard() {
   document.getElementById('kpiCatalogCount').textContent = `Across ${State.inventory.length} book titles`;
   document.getElementById('kpiLowStockCount').textContent = lowCount;
 
-  // Pure HTML/CSS Stock Bar Chart
-  const chartEl = document.getElementById('stockBarChart');
-  const maxCap = Math.max(50, ...State.inventory.map((i) => i.stock));
-  chartEl.innerHTML = State.inventory
+  renderSalesProfitLineChart();
+  renderLowStockLevelsChart();
+  renderBestsellersList(salesTxs);
+  renderTopSuppliersList();
+}
+
+function renderSalesProfitLineChart() {
+  const container = document.getElementById('salesProfitChart');
+  const readout = document.getElementById('salesProfitChartReadout');
+  const subtitle = document.getElementById('salesChartSubtitle');
+  if (!container) return;
+
+  const isOwner = State.currentUser && State.currentUser.role === 'Owner';
+  if (subtitle) {
+    subtitle.textContent = isOwner
+      ? `Daily gross revenue and net profit over the last ${State.salesChartDays} days`
+      : `Daily gross revenue over the last ${State.salesChartDays} days`;
+  }
+
+  const days = State.salesChartDays || 7;
+  const dayBuckets = [];
+  const bucketMap = new Map();
+  const now = new Date();
+
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const label = d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+    const bucket = { key, label, revenue: 0, profit: 0 };
+    dayBuckets.push(bucket);
+    bucketMap.set(key, bucket);
+  }
+
+  State.transactions
+    .filter((t) => t.type === 'SELL')
+    .forEach((t) => {
+      const d = new Date(t.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const bucket = bucketMap.get(key);
+      if (bucket) {
+        bucket.revenue += t.unitPrice * t.qty;
+        bucket.profit += (t.unitPrice - t.unitCost) * t.qty;
+      }
+    });
+
+  const periodRev = dayBuckets.reduce((s, b) => s + b.revenue, 0);
+  const periodProf = dayBuckets.reduce((s, b) => s + b.profit, 0);
+  if (readout) {
+    readout.innerHTML = isOwner
+      ? `Last ${days} days: <strong>${formatPHP(periodRev)}</strong> gross revenue • <strong style="color: var(--status-success);">${formatPHP(periodProf)}</strong> net profit`
+      : `Last ${days} days: <strong>${formatPHP(periodRev)}</strong> gross revenue`;
+  }
+
+  const width = 760;
+  const height = 230;
+  const padLeft = 68;
+  const padRight = 22;
+  const padTop = 18;
+  const padBottom = 34;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const maxVal = Math.max(
+    100,
+    ...dayBuckets.map((b) => Math.max(b.revenue, isOwner ? b.profit : 0))
+  );
+  const yTicks = 4;
+
+  const getX = (idx) =>
+    dayBuckets.length === 1 ? padLeft + plotW / 2 : padLeft + (idx / (dayBuckets.length - 1)) * plotW;
+  const getY = (val) => padTop + plotH - (Math.max(0, val) / maxVal) * plotH;
+
+  const gridLines = [];
+  for (let i = 0; i <= yTicks; i += 1) {
+    const ratio = i / yTicks;
+    const val = maxVal * (1 - ratio);
+    const y = padTop + ratio * plotH;
+    const shortVal =
+      val >= 1000 ? `₱${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}k` : `₱${Math.round(val)}`;
+    gridLines.push(`
+      <line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="var(--border-color)" stroke-dasharray="4 4" />
+      <text x="${padLeft - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--text-muted)" font-size="11" font-weight="600">${shortVal}</text>
+    `);
+  }
+
+  const labelStep = days <= 7 ? 1 : days <= 14 ? 2 : 5;
+  const xLabels = dayBuckets
+    .map((b, idx) => {
+      if (idx % labelStep !== 0 && idx !== dayBuckets.length - 1) return '';
+      const x = getX(idx);
+      return `<text x="${x.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="var(--text-muted)" font-size="11" font-weight="600">${escapeHtml(b.label)}</text>`;
+    })
+    .join('');
+
+  const revPoints = dayBuckets.map((b, idx) => `${getX(idx).toFixed(1)},${getY(b.revenue).toFixed(1)}`).join(' ');
+  const profPoints = dayBuckets.map((b, idx) => `${getX(idx).toFixed(1)},${getY(b.profit).toFixed(1)}`).join(' ');
+
+  const revDots = dayBuckets
+    .map((b, idx) => {
+      const cx = getX(idx).toFixed(1);
+      const cy = getY(b.revenue).toFixed(1);
+      return `
+        <circle cx="${cx}" cy="${cy}" r="4.2" fill="var(--accent-primary)" stroke="var(--bg-surface)" stroke-width="1.8">
+          <title>${escapeHtml(b.label)} — Revenue: ${formatPHP(b.revenue)}${isOwner ? ` | Profit: ${formatPHP(b.profit)}` : ''}</title>
+        </circle>
+      `;
+    })
+    .join('');
+
+  const profDots = isOwner
+    ? dayBuckets
+        .map((b, idx) => {
+          const cx = getX(idx).toFixed(1);
+          const cy = getY(b.profit).toFixed(1);
+          return `
+            <circle cx="${cx}" cy="${cy}" r="4.2" fill="var(--status-success)" stroke="var(--bg-surface)" stroke-width="1.8">
+              <title>${escapeHtml(b.label)} — Net Profit: ${formatPHP(b.profit)}</title>
+            </circle>
+          `;
+        })
+        .join('')
+    : '';
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" class="sales-line-svg" role="img" aria-label="Sales and Profit Line Chart">
+      ${gridLines.join('')}
+      ${xLabels}
+      <polyline fill="none" stroke="var(--accent-primary)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${revPoints}" />
+      ${
+        isOwner
+          ? `<polyline fill="none" stroke="var(--status-success)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${profPoints}" />`
+          : ''
+      }
+      ${revDots}
+      ${profDots}
+    </svg>
+  `;
+}
+
+function renderLowStockLevelsChart() {
+  const chartEl = document.getElementById('lowStockBarChart');
+  if (!chartEl) return;
+
+  const lowestFive = [...State.inventory]
+    .sort((a, b) => a.stock - b.stock || a.title.localeCompare(b.title))
+    .slice(0, 5);
+
+  if (lowestFive.length === 0) {
+    chartEl.innerHTML = `<div style="padding: 1.5rem; text-align: center;" class="text-sm text-muted">No books in inventory yet.</div>`;
+    return;
+  }
+
+  const maxCap = Math.max(10, ...lowestFive.map((i) => Math.max(Number(i.stock), Number(i.lowThreshold) * 2)));
+
+  chartEl.innerHTML = lowestFive
     .map((item) => {
       const pct = Math.min(100, Math.round((item.stock / maxCap) * 100));
       const isLow = item.stock <= item.lowThreshold;
       return `
         <div class="bar-row">
-          <div class="flex justify-between text-xs font-semibold">
-            <span>${escapeHtml(item.title)}</span>
-            <span class="${isLow ? 'pill pill-warning' : 'text-secondary'}">${item.stock} units</span>
+          <div class="flex justify-between text-xs font-semibold" style="gap: 0.5rem;">
+            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(item.title)}</span>
+            <span class="${isLow ? 'pill pill-warning' : 'text-secondary'}" style="flex-shrink: 0;">${item.stock} units</span>
           </div>
           <div class="bar-track">
             <div class="bar-fill ${isLow ? 'low' : ''}" style="width: ${pct}%;"></div>
@@ -762,8 +1119,9 @@ function renderDashboard() {
       `;
     })
     .join('');
+}
 
-  // Bestsellers filtered by Day / Week / Month / Year
+function renderBestsellersList(salesTxs) {
   const periodDurations = {
     day: 86400000,
     week: 86400000 * 7,
@@ -794,20 +1152,88 @@ function renderDashboard() {
     bestEl.innerHTML = ranked
       .map(
         (entry, index) => `
-        <div class="flex items-center justify-between" style="padding: 0.7rem 0.9rem; background: var(--bg-surface-alt); border-radius: var(--radius-md);">
-          <div class="flex items-center gap-2">
+        <div class="flex items-center justify-between" style="padding: 0.7rem 0.9rem; background: var(--bg-surface-alt); border-radius: var(--radius-md); gap: 0.5rem;">
+          <div class="flex items-center gap-2" style="min-width: 0;">
             <span class="pill pill-accent font-bold">#${index + 1}</span>
-            <div>
-              <div class="font-semibold text-sm">${escapeHtml(entry.item.title)}</div>
+            <div style="min-width: 0;">
+              <div class="font-semibold text-sm" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(entry.item.title)}</div>
               <div class="text-xs text-secondary">${formatPHP(entry.item.sellPrice)} each</div>
             </div>
           </div>
-          <span class="pill pill-success">${entry.soldQty} sold</span>
+          <span class="pill pill-success" style="flex-shrink: 0;">${entry.soldQty} sold</span>
         </div>
       `
       )
       .join('');
   }
+}
+
+function renderTopSuppliersList() {
+  const container = document.getElementById('topSuppliersList');
+  if (!container) return;
+
+  // Map book titles (lowercased) to their connected supplier
+  const titleToSupplierId = new Map();
+  State.inventory.forEach((item) => {
+    if (item.title && item.supplierId) {
+      titleToSupplierId.set(item.title.trim().toLowerCase(), String(item.supplierId));
+    }
+  });
+
+  // Browse audit log entries for RESTOCK_COMPLETED and tally restocked book quantities per supplier
+  const sourceLogs = (State.logs && State.logs.length ? State.logs : State.restockLogs).filter(
+    (entry) => entry.action === 'RESTOCK_COMPLETED'
+  );
+
+  const supplierTotals = new Map();
+
+  sourceLogs.forEach((log) => {
+    // Strip trailing "(Total: PHP ...)" from details string
+    const rawItemsPart = String(log.details || '').replace(/\s*\(Total:[^)]*\)\s*$/i, '');
+    const parts = rawItemsPart.split(/,\s*(?=\d+\s*x\s+)/i);
+
+    parts.forEach((part) => {
+      const match = part.trim().match(/^(\d+)\s*x\s+(.+)$/i);
+      if (!match) return;
+      const qty = Number(match[1]) || 0;
+      const bookTitle = match[2].trim().toLowerCase();
+      const supplierId = titleToSupplierId.get(bookTitle);
+      if (supplierId && qty > 0) {
+        supplierTotals.set(supplierId, (supplierTotals.get(supplierId) || 0) + qty);
+      }
+    });
+  });
+
+  const rankedSuppliers = Array.from(supplierTotals.entries())
+    .map(([supplierId, restockedQty]) => ({
+      supplier: State.suppliers.find((s) => String(s.id) === supplierId),
+      restockedQty
+    }))
+    .filter((entry) => entry.supplier)
+    .sort((a, b) => b.restockedQty - a.restockedQty || a.supplier.name.localeCompare(b.supplier.name))
+    .slice(0, 5);
+
+  if (rankedSuppliers.length === 0) {
+    container.innerHTML = `<div style="padding: 1.5rem; text-align: center;" class="text-sm text-muted">No supplier-linked restocks recorded in audit logs yet.</div>`;
+    return;
+  }
+
+  container.innerHTML = rankedSuppliers
+    .map(
+      (entry, index) => `
+      <div class="flex items-center justify-between" style="padding: 0.7rem 0.9rem; background: var(--bg-surface-alt); border-radius: var(--radius-md); gap: 0.5rem;">
+        <div class="flex items-center gap-2" style="min-width: 0;">
+          <span class="pill pill-accent font-bold">#${index + 1}</span>
+          <div style="min-width: 0;">
+            <div class="font-semibold text-sm" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(entry.supplier.name)}</div>
+            <div class="text-xs text-secondary">${escapeHtml(entry.supplier.contact || 'Distributor')} • ${entry.supplier.leadDays}d lead</div>
+          </div>
+        </div>
+        <span class="pill pill-info" style="flex-shrink: 0;">${entry.restockedQty} restocked</span>
+      </div>
+    `
+    )
+    .join('');
 }
 
 // ============================================================================
@@ -920,18 +1346,30 @@ function removeSupTagFilter(tag) {
   renderSuppliers();
 }
 
+window.toggleMobileInvCard = function (itemId) {
+  const card = document.getElementById(`inv-mobile-card-${itemId}`);
+  if (card) {
+    card.classList.toggle('expanded');
+  }
+};
+
 function renderInventoryTable() {
   const tbody = document.getElementById('inventoryTableBody');
+  const mobileCardsEl = document.getElementById('inventoryMobileCards');
   const tableContainer = document.getElementById('inventoryTableContainer');
   const coverGrid = document.getElementById('inventoryBookModeGrid');
   const paginationBar = document.getElementById('inventoryPaginationBar');
   const pageIndicator = document.getElementById('invPageIndicator');
   const prevBtn = document.getElementById('invPrevPageBtn');
   const nextBtn = document.getElementById('invNextPageBtn');
+  if (!tbody) return;
+
   const q = State.invSearch.trim().toLowerCase();
 
-  // Toggle between Table View and Book Mode Cover Grid
   tableContainer.classList.toggle('hidden', State.bookMode);
+  if (mobileCardsEl) {
+    mobileCardsEl.classList.toggle('hidden', State.bookMode);
+  }
   coverGrid.classList.toggle('hidden', !State.bookMode);
 
   let filtered = State.inventory.filter((item) => {
@@ -945,20 +1383,28 @@ function renderInventoryTable() {
     return matchesSearch && matchesTag;
   });
 
-  // Sorting
   filtered.sort((a, b) => {
     switch (State.invSort) {
-      case 'title-desc': return b.title.localeCompare(a.title);
-      case 'stock-asc': return a.stock - b.stock;
-      case 'stock-desc': return b.stock - a.stock;
-      case 'price-asc': return a.sellPrice - b.sellPrice;
-      case 'price-desc': return b.sellPrice - a.sellPrice;
-      default: return a.title.localeCompare(b.title);
+      case 'title-desc':
+        return b.title.localeCompare(a.title);
+      case 'stock-asc':
+        return a.stock - b.stock;
+      case 'stock-desc':
+        return b.stock - a.stock;
+      case 'price-asc':
+        return a.sellPrice - b.sellPrice;
+      case 'price-desc':
+        return b.sellPrice - a.sellPrice;
+      default:
+        return a.title.localeCompare(b.title);
     }
   });
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem;" class="text-muted">No matching books found.</td></tr>`;
+    if (mobileCardsEl) {
+      mobileCardsEl.innerHTML = `<div class="card text-muted" style="text-align: center;">No matching books found.</div>`;
+    }
     coverGrid.innerHTML = `<div class="card text-muted" style="grid-column: 1 / -1; text-align: center;">No matching books found.</div>`;
     paginationBar.classList.add('hidden');
     return;
@@ -976,7 +1422,7 @@ function renderInventoryTable() {
   prevBtn.disabled = State.invPage <= 1;
   nextBtn.disabled = State.invPage >= totalPages;
 
-  // Render Book Mode Cover Grid (with Sell & Restock buttons underneath each card)
+  // 1. Book Mode Cover Grid
   coverGrid.innerHTML = paginatedItems
     .map((item) => {
       const isLow = item.stock <= item.lowThreshold;
@@ -1001,8 +1447,8 @@ function renderInventoryTable() {
     })
     .join('');
 
-  // Render Standard Table View
-  tbody.innerHTML = filtered
+  // 2. Desktop Table View
+  tbody.innerHTML = paginatedItems
     .map((item) => {
       const isLow = item.stock <= item.lowThreshold;
       const supplier = State.suppliers.find((s) => s.id === item.supplierId);
@@ -1013,37 +1459,30 @@ function renderInventoryTable() {
             <div class="font-bold">${escapeHtml(item.title)}</div>
             <div class="text-xs text-secondary">${escapeHtml(item.author || 'Unknown Author')} • <span class="text-muted">${escapeHtml(item.sku)}</span></div>
           </td>
-
-          <!-- Read-only Tags Display (Editable via 3-dot modal) -->
           <td>
             <div class="flex" style="flex-wrap: wrap; gap: 0.3rem;">
               ${
                 item.tags.length
-                  ? item.tags.map((t) => `<span class="pill pill-accent" style="padding: 2px 8px; font-size: 0.7rem;">${escapeHtml(t)}</span>`).join('')
+                  ? item.tags
+                      .map((t) => `<span class="pill pill-accent" style="padding: 2px 8px; font-size: 0.7rem;">${escapeHtml(t)}</span>`)
+                      .join('')
                   : `<span class="text-xs text-muted">No tags</span>`
               }
             </div>
           </td>
-
-          <!-- Unchangeable Supplier Display -->
           <td>
             <span class="text-xs font-medium text-secondary">${escapeHtml(supplier ? supplier.name : 'Unassigned')}</span>
           </td>
-
           <td>
             <div class="font-semibold">${formatPHP(item.sellPrice)}</div>
             <div class="text-xs text-muted">Cost: ${formatPHP(item.costPrice)}</div>
           </td>
-
-          <!-- Read-only Stock Display -->
           <td>
             <div class="flex items-center gap-1">
               <span class="font-bold">${item.stock}</span>
               ${isLow ? `<span class="pill pill-warning" title="Low stock alert">Low</span>` : ''}
             </div>
           </td>
-
-          <!-- Sell, Restock & 3-dot Edit Book Actions -->
           <td style="text-align: right; white-space: nowrap;">
             <button class="btn btn-primary btn-sm" onclick="addToCartWithMode('${item.id}', 'SELL')">Sell</button>
             <button class="btn btn-outline btn-sm" onclick="addToCartWithMode('${item.id}', 'RESTOCK')">Restock</button>
@@ -1053,6 +1492,50 @@ function renderInventoryTable() {
       `;
     })
     .join('');
+
+  // 3. Mobile Inventory Cards
+  if (mobileCardsEl) {
+    mobileCardsEl.innerHTML = paginatedItems
+      .map((item) => {
+        const isLow = item.stock <= item.lowThreshold;
+        const supplier = State.suppliers.find((s) => s.id === item.supplierId);
+        return `
+          <div class="mobile-inv-card" id="inv-mobile-card-${item.id}">
+            <div class="flex justify-between items-start gap-2" onclick="toggleMobileInvCard('${item.id}')" style="cursor: pointer;">
+              <div style="min-width: 0;">
+                <div class="font-bold text-sm">${escapeHtml(item.title)}</div>
+                <div class="text-xs text-secondary">${escapeHtml(item.author || 'Unknown Author')} • ${formatPHP(item.sellPrice)}</div>
+              </div>
+              <div class="flex items-center gap-1" style="flex-shrink: 0;">
+                <span class="pill ${isLow ? 'pill-warning' : ''}">${item.stock} left</span>
+              </div>
+            </div>
+
+            <div class="mobile-inv-collapsible" style="padding-top: 0.55rem;">
+              <div class="text-xs text-secondary" style="margin-bottom: 0.35rem;">
+                SKU: <strong>${escapeHtml(item.sku)}</strong> • Cost: ${formatPHP(item.costPrice)} • Supplier: ${escapeHtml(supplier ? supplier.name : 'Unassigned')}
+              </div>
+              <div class="flex" style="flex-wrap: wrap; gap: 0.3rem;">
+                ${
+                  item.tags.length
+                    ? item.tags
+                        .map((t) => `<span class="pill pill-accent" style="padding: 2px 8px; font-size: 0.7rem;">${escapeHtml(t)}</span>`)
+                        .join('')
+                    : `<span class="text-xs text-muted">No tags</span>`
+                }
+              </div>
+            </div>
+
+            <div class="mobile-inv-actions">
+              <button type="button" class="btn btn-primary btn-sm" onclick="addToCartWithMode('${item.id}', 'SELL')">Sell</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="addToCartWithMode('${item.id}', 'RESTOCK')">Restock</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="openItemFormModal('${item.id}')" title="Edit Book" style="padding: 0.38rem 0.75rem; font-weight: 800;">⋮</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+  }
 }
 
 function renderTagsManagement() {
@@ -1117,15 +1600,19 @@ window.confirmDeleteTag = function (name) {
     </div>
   `);
   document.getElementById('confirmDeleteTagBtn').addEventListener('click', async () => {
-    await ApiService.manageTags('DELETE', { name }, actorString());
-    closeModal();
-    await refreshAllData();
-    showToast('Tag deleted');
+    try {
+      await ApiService.manageTags('DELETE', { name }, actorString());
+      closeModal();
+      await refreshAllData();
+      showToast('Tag deleted');
+    } catch (err) {
+      showToast(err.message);
+    }
   });
 };
 
 // ============================================================================
-// RECEIPT SIDE CART & CONFIRMATION MODAL (SEPARATE SELL & RESTOCK LISTS)
+// RECEIPT SIDE CART & CONFIRMATION MODAL
 // ============================================================================
 function getActiveCart() {
   return State.cartMode === 'SELL' ? State.sellCart : State.restockCart;
@@ -1219,6 +1706,7 @@ function renderCart() {
   const mobileReceiptAmount = document.getElementById('mobileReceiptTotalAmount');
   const activeCart = getActiveCart();
   const hasItems = State.sellCart.length > 0 || State.restockCart.length > 0;
+
   receiptEl.classList.toggle('hidden', !hasItems);
   document.getElementById('mobileReceiptToggle').classList.toggle('hidden', !hasItems);
   document.getElementById('invSubCatalog').classList.toggle('receipt-hidden', !hasItems);
@@ -1229,7 +1717,9 @@ function renderCart() {
     const otherQty = otherCart.reduce((total, entry) => total + entry.qty, 0);
     listEl.innerHTML = '';
     if (hasItems) {
-      listEl.innerHTML = `<div class="text-xs text-muted" style="padding: 1.5rem 0; text-align: center;">This ${State.cartMode === 'SELL' ? 'Sell' : 'Restock'} receipt is empty.${otherQty ? ` ${otherQty} item${otherQty === 1 ? '' : 's'} remain in the ${otherMode} receipt.` : ''}</div>`;
+      listEl.innerHTML = `<div class="text-xs text-muted" style="padding: 1.5rem 0; text-align: center;">This ${
+        State.cartMode === 'SELL' ? 'Sell' : 'Restock'
+      } receipt is empty.${otherQty ? ` ${otherQty} item${otherQty === 1 ? '' : 's'} remain in the ${otherMode} receipt.` : ''}</div>`;
     } else {
       closeMobileReceipt();
     }
@@ -1340,24 +1830,27 @@ function openTransactionConfirmModal() {
   });
 }
 
-// Add / Edit Book Modal (Separated Book Information & Stock Information + Image Preview)
+// ============================================================================
+// ADD / EDIT BOOK MODAL
+// ============================================================================
 window.openItemFormModal = function (itemId) {
   const existing = itemId ? State.inventory.find((i) => i.id === itemId) : null;
   State.modalSelectedTags = existing ? [...existing.tags] : [];
   State.modalMultiSelectOpen = false;
   const isNew = !existing;
-  const defaultCover = existing && existing.coverUrl
-    ? existing.coverUrl
-    : `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(existing ? existing.title : 'Book Cover')}`;
+  const defaultCover =
+    existing && existing.coverUrl
+      ? existing.coverUrl
+      : `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(existing ? existing.title : 'Book Cover')}`;
 
-  openModal(`
+  openModal(
+    `
     <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 1rem;">${existing ? 'Edit Book Details' : 'Add New Book'}</h3>
     <form id="itemModalForm">
       <!-- SECTION 1: BOOK INFORMATION -->
       <div class="modal-section">
         <div class="modal-section-title">Book Information</div>
 
-        <!-- Cover Image Preview & Upload -->
         <div class="flex gap-3 items-start" style="margin-bottom: 0.95rem;">
           <img id="fItemCoverPreview" class="edit-cover-preview" src="${escapeAttr(defaultCover)}" alt="Book Cover Preview" onerror="this.onerror=null;this.src='https://placehold.co/300x450/7B4B2A/FFFDF9?text=No+Cover';" />
           <div class="w-full" style="min-width: 0;">
@@ -1422,8 +1915,12 @@ window.openItemFormModal = function (itemId) {
         <div class="input-group">
           <label>Supplier</label>
           <select id="fItemSupplier" class="form-control">
+            <option value="">Unassigned</option>
             ${State.suppliers
-              .map((s) => `<option value="${s.id}" ${existing && existing.supplierId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`)
+              .map(
+                (s) =>
+                  `<option value="${s.id}" ${existing && existing.supplierId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
+              )
               .join('')}
           </select>
         </div>
@@ -1448,10 +1945,11 @@ window.openItemFormModal = function (itemId) {
         </div>
       </div>
     </form>
-  `, () => {
-    // Warn via bottom-right toast if exited without pressing Save Book
-    showToast('Changes were not saved');
-  });
+  `,
+    () => {
+      showToast('Changes were not saved');
+    }
+  );
 
   renderModalTagsMultiSelect();
 
@@ -1475,7 +1973,6 @@ window.openItemFormModal = function (itemId) {
     reader.readAsDataURL(file);
   });
 
-  // Prevent Enter key from submitting or closing the Edit Book pop-up (except inside textarea newlines)
   formEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
       e.preventDefault();
@@ -1489,9 +1986,10 @@ window.openItemFormModal = function (itemId) {
     const payload = {
       id: existing ? existing.id : null,
       title: titleVal,
-      coverUrl: existing && existing.coverUrl
-        ? existing.coverUrl
-        : `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(titleVal)}`,
+      coverUrl:
+        existing && existing.coverUrl
+          ? existing.coverUrl
+          : `https://placehold.co/300x450/7B4B2A/FFFDF9?text=${encodeURIComponent(titleVal)}`,
       author: document.getElementById('fItemAuthor').value.trim(),
       description: document.getElementById('fItemDesc').value.trim(),
       sku: document.getElementById('fItemSku').value.trim(),
@@ -1513,13 +2011,29 @@ window.openItemFormModal = function (itemId) {
   });
 
   if (existing) {
-    document.getElementById('deleteItemBtn').addEventListener('click', async () => {
-      await ApiService.deleteInventoryItem(existing.id, actorString());
-      State.sellCart = State.sellCart.filter((c) => c.itemId !== existing.id);
-      State.restockCart = State.restockCart.filter((c) => c.itemId !== existing.id);
-      closeModal();
-      await refreshAllData();
-      showToast('Book removed');
+    document.getElementById('deleteItemBtn').addEventListener('click', () => {
+      openModal(`
+        <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.5rem;">Delete Book</h3>
+        <p class="text-sm text-secondary" style="margin-bottom: 1.15rem;">
+          Are you sure you want to delete <strong>"${escapeHtml(existing.title)}"</strong>? Its transaction history will also be removed.
+        </p>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn btn-secondary" onclick="openItemFormModal('${existing.id}')">Back</button>
+          <button type="button" id="confirmDeleteBookBtn" class="btn btn-danger">Confirm Delete</button>
+        </div>
+      `);
+      document.getElementById('confirmDeleteBookBtn').addEventListener('click', async () => {
+        try {
+          await ApiService.deleteInventoryItem(existing.id, actorString());
+          State.sellCart = State.sellCart.filter((c) => c.itemId !== existing.id);
+          State.restockCart = State.restockCart.filter((c) => c.itemId !== existing.id);
+          closeModal();
+          await refreshAllData();
+          showToast('Book removed');
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
     });
   }
 };
@@ -1671,7 +2185,8 @@ window.openSupplierFormModal = function (supId) {
           <input type="email" id="fSupEmail" class="form-control" value="${existing ? escapeAttr(existing.email) : ''}" required />
         </div>
       </div>
-      <div class="input-group"> <label>Lead Time (Days)</label> 
+      <div class="input-group">
+        <label>Lead Time (Days)</label>
         <input type="number" id="fSupLead" class="form-control" min="1" value="${existing ? existing.leadDays || 1 : 1}" required />
       </div>
       <div class="input-group">
@@ -1689,8 +2204,8 @@ window.openSupplierFormModal = function (supId) {
             .join('')}
         </div>
       </div>
-      <div class="flex justify-end gap-2" style="margin-top: 1.15rem;">
-        ${existing ? `<button type="button" id="deleteSupplierBtn" class="btn btn-danger btn-sm">Delete</button>` : ''}
+      <div class="flex justify-between gap-2" style="margin-top: 1.15rem;">
+        ${existing ? `<button type="button" id="deleteSupplierBtn" class="btn btn-danger btn-sm">Delete</button>` : '<div></div>'}
         <div class="flex gap-2">
           <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
           <button type="submit" class="btn btn-primary">Save Supplier</button>
@@ -1706,7 +2221,9 @@ window.openSupplierFormModal = function (supId) {
     const formattedPhone = formatPhilippinePhone(phoneInput.value);
     if (phoneInput.value !== formattedPhone) {
       phoneInput.value = formattedPhone;
-      const formattedCursor = 4 + digitsBeforeCursor +
+      const formattedCursor =
+        4 +
+        digitsBeforeCursor +
         (digitsBeforeCursor > 3 ? 1 : 0) +
         (digitsBeforeCursor > 6 ? 1 : 0);
       phoneInput.setSelectionRange(formattedCursor, formattedCursor);
@@ -1715,46 +2232,60 @@ window.openSupplierFormModal = function (supId) {
 
   document.getElementById('supplierModalForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const checkedTags = Array.from(document.querySelectorAll('input[name="fSupTags"]:checked')).map((el) => el.value);
-    await ApiService.saveSupplier(
-      {
-        id: existing ? existing.id : null,
-        name: document.getElementById('fSupName').value.trim(),
-        contact: document.getElementById('fSupContact').value.trim(),
-        leadDays: Number(document.getElementById('fSupLead').value),
-        phone: document.getElementById('fSupPhone').value.trim(),
-        email: document.getElementById('fSupEmail').value.trim(),
-        tags: checkedTags
-      },
-      actorString()
-    );
-    closeModal();
-    await refreshAllData();
-    showToast(existing ? 'Supplier updated' : 'Supplier added');
+    try {
+      const checkedTags = Array.from(document.querySelectorAll('input[name="fSupTags"]:checked')).map((el) => el.value);
+      await ApiService.saveSupplier(
+        {
+          id: existing ? existing.id : null,
+          name: document.getElementById('fSupName').value.trim(),
+          contact: document.getElementById('fSupContact').value.trim(),
+          leadDays: Number(document.getElementById('fSupLead').value),
+          phone: document.getElementById('fSupPhone').value.trim(),
+          email: document.getElementById('fSupEmail').value.trim(),
+          tags: checkedTags
+        },
+        actorString()
+      );
+      closeModal();
+      await refreshAllData();
+      showToast(existing ? 'Supplier updated' : 'Supplier added');
+    } catch (err) {
+      showToast(err.message);
+    }
   });
 
   const deleteSupplierBtn = document.getElementById('deleteSupplierBtn');
   if (deleteSupplierBtn && existing) {
-    deleteSupplierBtn.addEventListener('click', async () => {
+    deleteSupplierBtn.addEventListener('click', () => {
       const linkedBooks = State.inventory.filter((item) => item.supplierId === existing.id).length;
-      const confirmation = linkedBooks
-        ? `Delete "${existing.name}"? ${linkedBooks} linked book(s) will remain in inventory but become unassigned.`
-        : `Delete "${existing.name}"? This action cannot be undone.`;
-      if (!window.confirm(confirmation)) return;
+      const detailText = linkedBooks
+        ? `${linkedBooks} linked book(s) will remain in inventory but become unassigned.`
+        : 'This action cannot be undone.';
 
-      deleteSupplierBtn.disabled = true;
-      try {
-        const result = await ApiService.deleteSupplier(existing.id, actorString());
-        closeModal();
-        await refreshAllData();
-        const unassigned = Number(result?.unassignedItems || 0);
-        showToast(unassigned
-          ? `Supplier deleted. ${unassigned} book(s) are now unassigned.`
-          : 'Supplier deleted');
-      } catch (err) {
-        deleteSupplierBtn.disabled = false;
-        showToast(err.message);
-      }
+      openModal(`
+        <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.5rem;">Delete Supplier</h3>
+        <p class="text-sm text-secondary" style="margin-bottom: 1.15rem;">
+          Are you sure you want to delete <strong>"${escapeHtml(existing.name)}"</strong>? ${detailText}
+        </p>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn btn-secondary" onclick="openSupplierFormModal('${existing.id}')">Back</button>
+          <button type="button" id="confirmDeleteSupplierBtn" class="btn btn-danger">Confirm Delete</button>
+        </div>
+      `);
+
+      document.getElementById('confirmDeleteSupplierBtn').addEventListener('click', async () => {
+        try {
+          const result = await ApiService.deleteSupplier(existing.id, actorString());
+          closeModal();
+          await refreshAllData();
+          const unassigned = Number(result?.unassignedItems || 0);
+          showToast(
+            unassigned ? `Supplier deleted. ${unassigned} book(s) are now unassigned.` : 'Supplier deleted'
+          );
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
     });
   }
 };
@@ -1785,13 +2316,12 @@ function renderUsers() {
             <button class="btn btn-secondary btn-sm" onclick="openUserFormModal('${u.id}')" title="Edit User" style="padding: 0.38rem 0.65rem; font-weight: 800;">⋮</button>
             <button class="btn btn-secondary btn-sm" onclick="openAdminResetPassModal('${u.id}')">Reset Pass</button>
             ${
-              !isSelf
+              !isSelf && u.role !== 'Owner'
                 ? `<button class="btn ${u.active ? 'btn-danger' : 'btn-outline'} btn-sm" onclick="toggleUserStatus('${u.id}')">
                     ${u.active ? 'Deactivate' : 'Activate'}
                   </button>`
                 : ''
             }
-
           </div>
         </div>
       `;
@@ -1801,8 +2331,10 @@ function renderUsers() {
 
 window.openUserFormModal = function (userId) {
   const existing = userId ? State.users.find((u) => u.id === userId) : null;
+  const activeOtherUsers = State.users.filter((u) => u.active && (!existing || u.id !== existing.id));
+
   openModal(`
-    <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 1rem;">${existing ? 'Edit User Account' : 'Create New User'}</h3>
+    <h3 class="font-bold" style="font-size: 1.18rem; margin-bottom: 1rem;">${existing ? 'Edit User Account' : 'Create New Staff User'}</h3>
     <form id="userModalForm">
       <div class="input-group">
         <label>Full Name</label>
@@ -1814,16 +2346,47 @@ window.openUserFormModal = function (userId) {
       </div>
       <div class="input-group">
         <label>Role</label>
-        <select id="fUserRole" class="form-control">
-          <option value="Staff" ${existing && existing.role === 'Staff' ? 'selected' : ''}>Staff (Dashboard, Inventory Management, Supplier Management)</option>
-          <option value="Owner" ${existing && existing.role === 'Owner' ? 'selected' : ''}>Owner (Full Access + Profit, Users, Logs)</option>
+        <select id="fUserRole" class="form-control" ${!existing ? 'disabled' : ''}>
+          <option value="Staff" ${!existing || existing.role === 'Staff' ? 'selected' : ''}>Staff (Dashboard, Inventory Management, Supplier Management)</option>
+          ${
+            existing
+              ? `<option value="Owner" ${existing.role === 'Owner' ? 'selected' : ''}>Owner (Full Access + Profit, Users, Logs)</option>`
+              : ''
+          }
+        </select>
+        ${
+          !existing
+            ? `<small class="text-muted">Only one Owner account is allowed. Ownership can be transferred when editing an existing account.</small>`
+            : ''
+        }
+      </div>
+
+      <div id="successorFieldGroup" class="input-group hidden">
+        <label for="fSuccessorSelect">Transfer Owner Role To</label>
+        <select id="fSuccessorSelect" class="form-control">
+          <option value="">Select an active user...</option>
+          ${activeOtherUsers
+            .map((u) => `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`)
+            .join('')}
         </select>
       </div>
+
+      <div id="ownerConfirmPassGroup" class="input-group hidden">
+        <label for="fOwnerConfirmPass">Confirm Your Owner Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="fOwnerConfirmPass" class="form-control" placeholder="Enter your current password to confirm role transfer" />
+          <button type="button" class="password-toggle-btn" data-toggle-pass="fOwnerConfirmPass" aria-pressed="false">Show</button>
+        </div>
+      </div>
+
       ${
         !existing
           ? `<div class="input-group">
               <label>Initial Password</label>
-              <input type="password" id="fUserPass" class="form-control" value="" minlength="6" required />
+              <div class="password-field-wrap">
+                <input type="password" id="fUserPass" class="form-control" value="" minlength="6" required />
+                <button type="button" class="password-toggle-btn" data-toggle-pass="fUserPass" aria-pressed="false">Show</button>
+              </div>
             </div>`
           : ''
       }
@@ -1834,45 +2397,133 @@ window.openUserFormModal = function (userId) {
     </form>
   `);
 
+  const roleSelect = document.getElementById('fUserRole');
+  const successorGroup = document.getElementById('successorFieldGroup');
+  const ownerPassGroup = document.getElementById('ownerConfirmPassGroup');
+  const ownerPassInput = document.getElementById('fOwnerConfirmPass');
+  const successorSelect = document.getElementById('fSuccessorSelect');
+
+  const syncRoleTransferFields = () => {
+    if (!existing) return;
+    const nextRole = roleSelect.value;
+    const isDemotingOwner = existing.role === 'Owner' && nextRole !== 'Owner';
+    const isPromotingToOwner = existing.role !== 'Owner' && nextRole === 'Owner';
+    const requiresOwnerAuth = isDemotingOwner || isPromotingToOwner;
+
+    successorGroup.classList.toggle('hidden', !isDemotingOwner);
+    ownerPassGroup.classList.toggle('hidden', !requiresOwnerAuth);
+    ownerPassInput.required = requiresOwnerAuth;
+    successorSelect.required = isDemotingOwner;
+  };
+
+  if (existing) {
+    roleSelect.addEventListener('change', syncRoleTransferFields);
+    syncRoleTransferFields();
+  }
+
   document.getElementById('userModalForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await ApiService.manageUsers(
+      const nextRole = existing ? roleSelect.value : 'Staff';
+      const updatedUsers = await ApiService.manageUsers(
         'SAVE',
         {
           id: existing ? existing.id : null,
           name: document.getElementById('fUserName').value.trim(),
           email: document.getElementById('fUserEmail').value.trim(),
-          role: document.getElementById('fUserRole').value,
-          password: existing ? undefined : document.getElementById('fUserPass').value
+          role: nextRole,
+          password: existing ? undefined : document.getElementById('fUserPass').value,
+          successorId: successorSelect ? successorSelect.value : undefined,
+          ownerPassword: ownerPassInput ? ownerPassInput.value : undefined
         },
         actorString()
       );
+
+      const me = updatedUsers.find((u) => u.id === State.currentUser.id);
+      if (me) {
+        State.currentUser = me;
+        ApiService.setSession(me);
+        applyRolePermissions(me);
+      }
+
       closeModal();
-      await refreshAllData();
-      showToast(existing ? 'User updated' : 'User created');
+      if (State.currentUser.role !== 'Owner') {
+        await refreshAllData();
+        switchTab('dashboard');
+        showToast('Owner role transferred. You are now signed in as Staff.');
+      } else {
+        await refreshAllData();
+        showToast(existing ? 'User updated' : 'User created');
+      }
     } catch (err) {
       showToast(err.message);
     }
   });
 };
 
-window.toggleUserStatus = async function (userId) {
-  await ApiService.manageUsers('TOGGLE_ACTIVE', { id: userId }, actorString());
-  await refreshAllData();
-  showToast('Account status updated');
+window.toggleUserStatus = function (userId) {
+  const target = State.users.find((u) => u.id === userId);
+  if (!target) return;
+  const nextVerb = target.active ? 'Deactivate' : 'Activate';
+
+  openModal(`
+    <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.5rem;">${nextVerb} Account</h3>
+    <p class="text-xs text-secondary" style="margin-bottom: 1rem;">
+      Enter your Owner password to ${nextVerb.toLowerCase()} <strong>${escapeHtml(target.name)}</strong> (${escapeHtml(target.email)}).
+    </p>
+    <form id="toggleUserStatusForm">
+      <div class="input-group">
+        <label for="statusOwnerPassField">Owner Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="statusOwnerPassField" class="form-control" required />
+          <button type="button" class="password-toggle-btn" data-toggle-pass="statusOwnerPassField" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2" style="margin-top: 1rem;">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn ${target.active ? 'btn-danger' : 'btn-primary'}">${nextVerb}</button>
+      </div>
+    </form>
+  `);
+
+  document.getElementById('toggleUserStatusForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await ApiService.manageUsers(
+        'TOGGLE_ACTIVE',
+        { id: userId, ownerPassword: document.getElementById('statusOwnerPassField').value },
+        actorString()
+      );
+      closeModal();
+      await refreshAllData();
+      showToast('Account status updated');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
 };
 
 window.openAdminResetPassModal = function (userId) {
   const target = State.users.find((u) => u.id === userId);
   if (!target) return;
+
   openModal(`
     <h3 class="font-bold" style="font-size: 1.15rem; margin-bottom: 0.5rem;">Reset Password</h3>
     <p class="text-xs text-secondary" style="margin-bottom: 1rem;">Set a new password for <strong>${escapeHtml(target.name)}</strong> (${escapeHtml(target.email)}).</p>
     <form id="adminResetForm">
       <div class="input-group">
-        <label>New Password</label>
-        <input type="password" id="adminNewPassField" class="form-control" minlength="6" required />
+        <label for="adminNewPassField">New User Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="adminNewPassField" class="form-control" minlength="6" required />
+          <button type="button" class="password-toggle-btn" data-toggle-pass="adminNewPassField" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <div class="input-group">
+        <label for="adminOwnerConfirmField">Your Owner Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="adminOwnerConfirmField" class="form-control" required />
+          <button type="button" class="password-toggle-btn" data-toggle-pass="adminOwnerConfirmField" aria-pressed="false">Show</button>
+        </div>
       </div>
       <div class="flex justify-end gap-2" style="margin-top: 1rem;">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -1880,24 +2531,54 @@ window.openAdminResetPassModal = function (userId) {
       </div>
     </form>
   `);
+
   document.getElementById('adminResetForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await ApiService.manageUsers(
-      'RESET_PASS',
-      { id: userId, newPassword: document.getElementById('adminNewPassField').value },
-      actorString()
-    );
-    closeModal();
-    await refreshAllData();
-    showToast('User password reset');
+    try {
+      await ApiService.manageUsers(
+        'RESET_PASS',
+        {
+          id: userId,
+          newPassword: document.getElementById('adminNewPassField').value,
+          ownerPassword: document.getElementById('adminOwnerConfirmField').value
+        },
+        actorString()
+      );
+      closeModal();
+      await refreshAllData();
+      showToast('User password reset');
+    } catch (err) {
+      showToast(err.message);
+    }
   });
 };
 
 // ============================================================================
 // MODULE 7: AUDIT LOGS (OWNER ONLY)
 // ============================================================================
+function formatLogDetailsHtml(details) {
+  const lines = String(details ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length <= 1) {
+    return escapeHtml(lines[0] || '');
+  }
+
+  return `
+    <details class="log-details-collapsible">
+      <summary>${lines.length} field changes</summary>
+      <ul class="log-diff-list">
+        ${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+      </ul>
+    </details>
+  `;
+}
+
 function renderLogs() {
   const tbody = document.getElementById('auditLogsTableBody');
+  const mobileCardsEl = document.getElementById('auditLogsMobileCards');
   const q = State.logSearch.trim().toLowerCase();
   const filtered = State.logs.filter(
     (l) =>
@@ -1910,6 +2591,9 @@ function renderLogs() {
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 2rem;" class="text-muted">No audit log entries match your filter.</td></tr>`;
+    if (mobileCardsEl) {
+      mobileCardsEl.innerHTML = `<div class="card text-muted" style="text-align: center;">No audit log entries match your filter.</div>`;
+    }
     return;
   }
 
@@ -1929,11 +2613,43 @@ function renderLogs() {
           <td class="font-semibold text-xs">${escapeHtml(log.user)}</td>
           <td><span class="pill pill-accent">${escapeHtml(log.action)}</span></td>
           <td class="font-medium text-xs">${escapeHtml(log.target)}</td>
-          <td class="text-xs text-secondary">${escapeHtml(log.details)}</td>
+          <td class="text-xs text-secondary">${formatLogDetailsHtml(log.details)}</td>
         </tr>
       `;
     })
     .join('');
+
+  if (mobileCardsEl) {
+    mobileCardsEl.innerHTML = filtered
+      .map((log) => {
+        const dt = new Date(log.timestamp);
+        const formattedDate = dt.toLocaleString('en-PH', {
+          month: 'short',
+          day: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        return `
+          <details class="card mobile-log-card">
+            <summary class="mobile-log-summary flex justify-between items-start gap-2">
+              <div style="min-width: 0;">
+                <div class="flex items-center gap-1" style="flex-wrap: wrap; margin-bottom: 0.25rem;">
+                  <span class="pill pill-accent">${escapeHtml(log.action)}</span>
+                  <span class="font-bold text-xs">${escapeHtml(log.target)}</span>
+                </div>
+                <div class="text-xs text-secondary">${escapeHtml(log.user)}</div>
+              </div>
+              <span class="text-xs text-muted" style="white-space: nowrap;">${formattedDate}</span>
+            </summary>
+            <div class="mobile-log-body text-xs text-secondary">
+              ${formatLogDetailsHtml(log.details)}
+            </div>
+          </details>
+        `;
+      })
+      .join('');
+  }
 }
 
 // ============================================================================
