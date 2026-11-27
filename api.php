@@ -193,6 +193,9 @@ try {
 
     requireLogin();
     $actorUser = $_SESSION['user'];
+    if ($action === 'check_session') {
+        respond($actorUser);
+    }
     $actor = $in['actor'] ?? ($actorUser['name'] . ' (' . $actorUser['role'] . ')');
 
     switch ($action) {
@@ -222,11 +225,16 @@ try {
 
         case 'get_inventory':
             $tags = $pdo->query('SELECT name FROM categories ORDER BY name')->fetchAll(PDO::FETCH_COLUMN);
+            $restockLogs = [];
+            if ($actorUser['role'] === 'Owner') {
+                $restockLogs = $pdo->query("SELECT details, created_at FROM audit_logs WHERE action='RESTOCK_COMPLETED' ORDER BY log_id DESC")->fetchAll();
+            }
             respond([
                 'items' => getItemRows(),
                 'tags' => $tags,
                 'suppliers' => getSupplierRows(),
-                'transactions' => getTransactions()
+                'transactions' => getTransactions(),
+                'restockLogs' => $restockLogs
             ]);
 
         case 'save_inventory_item':

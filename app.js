@@ -948,10 +948,13 @@ function renderDashboard() {
   document.getElementById('kpiCatalogCount').textContent = `Across ${State.inventory.length} book titles`;
   document.getElementById('kpiLowStockCount').textContent = lowCount;
 
-  renderSalesProfitLineChart();
+  if (State.currentUser && State.currentUser.role === 'Owner') {
+    renderSalesProfitLineChart();
+    renderTopSuppliersList();
+  }
   renderLowStockLevelsChart();
   renderBestsellersList(salesTxs);
-  renderTopSuppliersList();
+  
 }
 
 function renderSalesProfitLineChart() {
